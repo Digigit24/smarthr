@@ -35,20 +35,33 @@ class VoiceAIClient:
             "Accept": "application/json",
         })
 
-    def _headers(self, tenant_id: Optional[str] = None) -> dict[str, str]:
-        h = {"Authorization": f"Bearer {self.api_key}"}
+    def _headers(self, tenant_id: Optional[str] = None, auth_token: Optional[str] = None) -> dict[str, str]:
+        bearer = auth_token if auth_token else self.api_key
+        h = {"Authorization": f"Bearer {bearer}"}
         if tenant_id:
             h["x-tenant-id"] = str(tenant_id)
         return h
 
-    def _request(self, method: str, path: str, tenant_id: Optional[str] = None, **kwargs) -> Any:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        tenant_id: Optional[str] = None,
+        auth_token: Optional[str] = None,
+        **kwargs,
+    ) -> Any:
         """
         Make an authenticated HTTP request to the Voice AI Orchestrator.
         Parses the { success, data, error } response format.
         Raises typed VoiceAI exceptions on failure.
+
+        Args:
+            auth_token: If provided, use this JWT token instead of the service API key.
+                        Use when proxying requests on behalf of an authenticated user,
+                        since both SmartHR and CeliyoVoice share the same JWT secret.
         """
         url = f"{self.base_url}{path}"
-        headers = self._headers(tenant_id)
+        headers = self._headers(tenant_id, auth_token=auth_token)
         logger.debug(f"VoiceAI {method} {url} tenant={tenant_id}")
 
         try:
@@ -109,6 +122,7 @@ class VoiceAIClient:
         provider: Optional[str] = None,
         is_active: Optional[bool] = None,
         search: Optional[str] = None,
+        auth_token: Optional[str] = None,
     ) -> dict:
         """GET /api/v1/agents — paginated list of agents."""
         params: dict = {"page": page, "limit": limit}
@@ -118,11 +132,11 @@ class VoiceAIClient:
             params["isActive"] = str(is_active).lower()
         if search:
             params["search"] = search
-        return self._request("GET", "/api/v1/agents", tenant_id, params=params)
+        return self._request("GET", "/api/v1/agents", tenant_id, auth_token=auth_token, params=params)
 
-    def get_agent(self, tenant_id: str, agent_id: str) -> dict:
+    def get_agent(self, tenant_id: str, agent_id: str, auth_token: Optional[str] = None) -> dict:
         """GET /api/v1/agents/:id"""
-        return self._request("GET", f"/api/v1/agents/{agent_id}", tenant_id)
+        return self._request("GET", f"/api/v1/agents/{agent_id}", tenant_id, auth_token=auth_token)
 
     def create_agent(self, tenant_id: str, payload: dict) -> dict:
         """POST /api/v1/agents"""

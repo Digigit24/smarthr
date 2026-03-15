@@ -98,6 +98,66 @@ def handle_call_completed(payload: dict[str, Any]) -> dict:
     except Exception as e:
         logger.error(f"Failed to log activity: {e}")
 
+    # 6. Update CallQueueItem if this call was part of a queue
+    try:
+        from call_queue.models import CallQueueItem, CallQueue
+        from django.db.models import F
+        from django.utils import timezone
+
+        queue_item = CallQueueItem.objects.filter(
+            call_record=call_record,
+        ).select_related("queue").first()
+
+        if not queue_item:
+            # Also try to find by application in case call_record FK isn't set
+            queue_item = CallQueueItem.objects.filter(
+                application=application,
+                status=CallQueueItem.Status.CALLING,
+            ).select_related("queue").first()
+
+        if queue_item:
+            overall_score = scorecard.overall_score if score_data else None
+            queue_item.status = CallQueueItem.Status.COMPLETED
+            queue_item.score = overall_score
+            queue_item.completed_at = timezone.now()
+            queue_item.call_record = call_record
+            queue_item.save(update_fields=["status", "score", "completed_at", "call_record_id", "updated_at"])
+
+            # Update queue completed counter
+            CallQueue.objects.filter(id=queue_item.queue_id).update(
+                total_completed=F("total_completed") + 1
+            )
+
+            logger.info(
+                f"CallQueueItem {queue_item.id} updated to COMPLETED, score={overall_score}"
+            )
+
+            # Log activity for queue item completion
+            try:
+                from activities.services import log_activity as _log
+                _log(
+                    tenant_id=str(call_record.tenant_id),
+                    actor_user_id=str(call_record.owner_user_id),
+                    actor_email="system",
+                    verb=Activity.Verb.CALL_COMPLETED,
+                    resource_type="CallQueueItem",
+                    resource_id=str(queue_item.id),
+                    resource_label=f"Queue call for {application.applicant.first_name} {application.applicant.last_name}",
+                    after={"status": "COMPLETED", "score": str(overall_score) if overall_score else None},
+                    metadata={"queue_id": str(queue_item.queue_id), "call_record_id": str(call_record.id)},
+                )
+            except Exception as e:
+                logger.error(f"Failed to log queue item activity: {e}")
+
+            # Trigger next item in the queue
+            queue = queue_item.queue
+            if queue.status == CallQueue.Status.RUNNING:
+                from call_queue.tasks import process_call_queue
+                process_call_queue.delay(str(queue.id), str(call_record.tenant_id))
+
+    except Exception as e:
+        logger.error(f"Failed to update CallQueueItem on call completion: {e}")
+
     return {"status": "processed", "call_record_id": str(call_record.id)}
 
 

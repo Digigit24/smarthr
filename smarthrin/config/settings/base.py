@@ -67,6 +67,7 @@ INSTALLED_APPS = [
     "notifications.apps.NotificationsConfig",
     "integrations",
     "activities",
+    "call_queue.apps.CallQueueConfig",
 ]
 
 MIDDLEWARE = [
@@ -180,6 +181,8 @@ SPECTACULAR_SETTINGS = {
         {"name": "Notifications", "description": "In-app notifications"},
         {"name": "Activities", "description": "Audit activity feed"},
         {"name": "Webhooks", "description": "Incoming webhooks from Voice AI"},
+        {"name": "Call Queues", "description": "Batch AI screening call queue management"},
+        {"name": "Voice Agents", "description": "Voice agent management proxy to CeliyoVoice"},
     ],
     "PREPROCESSING_HOOKS": [],
     "ENUM_NAME_OVERRIDES": {},
@@ -211,3 +214,12 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = "UTC"
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+
+# Celery Beat schedule for built-in periodic tasks
+CELERY_BEAT_SCHEDULE = {
+    "tick-running-call-queues": {
+        "task": "call_queue.tasks.tick_running_queues",
+        "schedule": 60.0,  # Every 60 seconds
+        "options": {"expires": 55},  # Expire before next run to prevent pile-up
+    },
+}

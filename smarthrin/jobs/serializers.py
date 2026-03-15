@@ -3,6 +3,12 @@ from rest_framework import serializers
 from .models import Job
 
 
+class JobVoiceConfigSerializer(serializers.Serializer):
+    """Serializer for updating voice agent config on a job."""
+    voice_agent_id = serializers.CharField(required=False, allow_blank=True)
+    voice_agent_config = serializers.JSONField(required=False, default=dict)
+
+
 class JobListSerializer(serializers.ModelSerializer):
     """Minimal fields for list views."""
     class Meta:
