@@ -42,5 +42,9 @@ class Application(TenantBaseModel):
             )
         ]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._original_status = self.status if self.pk else None
+
     def __str__(self) -> str:
         return f"{self.applicant} → {self.job} [{self.status}]"

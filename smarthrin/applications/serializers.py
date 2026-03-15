@@ -150,3 +150,40 @@ class ApplicationDetailSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+
+class ApplicationCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Application
+        fields = [
+            "job",
+            "applicant",
+            "status",
+            "score",
+            "rejection_reason",
+            "notes",
+            "metadata",
+        ]
+
+
+class ChangeStatusSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=Application.Status.choices)
+    reason = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class BulkActionSerializer(serializers.Serializer):
+    application_ids = serializers.ListField(child=serializers.UUIDField(), min_length=1)
+    action = serializers.ChoiceField(choices=[("change_status", "Change Status")])
+    status = serializers.ChoiceField(choices=Application.Status.choices, required=False)
+
+
+class TriggerAICallResponseSerializer(serializers.Serializer):
+    """Response shape for trigger-ai-call action — matches CallRecordDetailSerializer."""
+    id = serializers.UUIDField()
+    application_id = serializers.UUIDField()
+    provider = serializers.CharField()
+    status = serializers.CharField()
+    phone = serializers.CharField()
+    voice_agent_id = serializers.CharField()
+    provider_call_id = serializers.CharField()
+    created_at = serializers.DateTimeField()

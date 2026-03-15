@@ -2,7 +2,9 @@
 import uuid
 from django.db import transaction
 from django.db.models import F
-from rest_framework import status
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, inline_serializer
+from drf_spectacular.types import OpenApiTypes
+from rest_framework import serializers as drf_serializers, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
@@ -19,9 +21,59 @@ from common.permissions import require_permission
 
 from .filters import ApplicationFilterSet
 from .models import Application
-from .serializers import ApplicationDetailSerializer, ApplicationListSerializer
+from .serializers import (
+    ApplicationDetailSerializer,
+    ApplicationListSerializer,
+    ApplicationCreateSerializer,
+    ChangeStatusSerializer,
+    BulkActionSerializer,
+    TriggerAICallResponseSerializer,
+)
 
 
+@extend_schema_view(
+    list=extend_schema(
+        tags=["Applications"],
+        summary="List applications",
+        description="Returns paginated list of applications for the tenant. Supports filtering by status, job, applicant.",
+        parameters=[
+            OpenApiParameter("status", OpenApiTypes.STR, description="Filter by application status"),
+            OpenApiParameter("job_id", OpenApiTypes.UUID, description="Filter by job ID"),
+            OpenApiParameter("applicant_id", OpenApiTypes.UUID, description="Filter by applicant ID"),
+        ],
+        responses={200: ApplicationListSerializer(many=True)},
+    ),
+    create=extend_schema(
+        tags=["Applications"],
+        summary="Create an application",
+        description="Creates a new application linking an applicant to a job. Supports inline applicant creation.",
+        request=ApplicationCreateSerializer,
+        responses={201: ApplicationDetailSerializer},
+    ),
+    retrieve=extend_schema(
+        tags=["Applications"],
+        summary="Get application details",
+        description="Returns full application details including nested call records, scorecards, and interviews.",
+        responses={200: ApplicationDetailSerializer},
+    ),
+    update=extend_schema(
+        tags=["Applications"],
+        summary="Update application",
+        request=ApplicationCreateSerializer,
+        responses={200: ApplicationDetailSerializer},
+    ),
+    partial_update=extend_schema(
+        tags=["Applications"],
+        summary="Partial update application",
+        request=ApplicationCreateSerializer,
+        responses={200: ApplicationDetailSerializer},
+    ),
+    destroy=extend_schema(
+        tags=["Applications"],
+        summary="Delete application",
+        responses={204: None},
+    ),
+)
 class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
     """CRUD + extra actions for Application."""
 
@@ -51,6 +103,8 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
     def get_serializer_class(self):
         if self.action == "list":
             return ApplicationListSerializer
+        if self.action in ("create", "update", "partial_update"):
+            return ApplicationCreateSerializer
         return ApplicationDetailSerializer
 
     @transaction.atomic
@@ -102,6 +156,13 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
     # Extra actions
     # ------------------------------------------------------------------
 
+    @extend_schema(
+        tags=["Applications"],
+        summary="Change application status",
+        description="Update the status of an application. Setting to AI_SCREENING automatically queues an AI call.",
+        request=ChangeStatusSerializer,
+        responses={200: ApplicationDetailSerializer},
+    )
     @action(detail=True, methods=["post"], url_path="change-status", url_name="change-status")
     def change_status(self, request, pk=None):
         """Change application status; triggers AI call task when status=AI_SCREENING."""
@@ -148,6 +209,13 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
         )
         return Response(serializer.data)
 
+    @extend_schema(
+        tags=["Applications"],
+        summary="Trigger AI screening call",
+        description="Manually initiates an AI voice screening call for this application.",
+        request=None,
+        responses={201: TriggerAICallResponseSerializer},
+    )
     @action(detail=True, methods=["post"], url_path="trigger-ai-call", url_name="trigger-ai-call")
     def trigger_ai_call(self, request, pk=None):
         """Manually trigger an AI screening call for this application."""
@@ -171,6 +239,16 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
         serializer = CallRecordSerializer(call_record, context={"request": request})
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+    @extend_schema(
+        tags=["Applications"],
+        summary="Bulk action on applications",
+        description="Apply an action (e.g. change_status) to multiple applications at once.",
+        request=BulkActionSerializer,
+        responses={200: inline_serializer("BulkActionResponse", fields={
+            "updated": drf_serializers.IntegerField(),
+            "action": drf_serializers.CharField(),
+        })},
+    )
     @action(detail=False, methods=["post"], url_path="bulk-action", url_name="bulk-action")
     def bulk_action(self, request):
         """
