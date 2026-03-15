@@ -1,0 +1,15 @@
+Django>=5.0,<6.0
+djangorestframework>=3.15
+django-cors-headers
+django-filter
+django-environ
+djangorestframework-simplejwt
+PyJWT
+psycopg2-binary
+celery[redis]
+django-celery-beat
+redis
+requests
+gunicorn
+dj-database-url
+python-dotenv
