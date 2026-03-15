@@ -5,6 +5,6 @@ from rest_framework.routers import DefaultRouter
 from .views import PipelineStageViewSet
 
 router = DefaultRouter()
-router.register(r"stages", PipelineStageViewSet, basename="pipeline-stage")
+router.register(r"", PipelineStageViewSet, basename="pipeline-stage")
 
 urlpatterns = [path("", include(router.urls))]
