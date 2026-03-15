@@ -3,7 +3,6 @@
 MODULE_NAME = "smarthrin"
 
 PUBLIC_PATHS = [
-    "/",
     "/health/",
     "/admin/",
     "/api/docs/",
