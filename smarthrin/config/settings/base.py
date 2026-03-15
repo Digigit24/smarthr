@@ -55,7 +55,7 @@ INSTALLED_APPS = [
     "drf_spectacular",
     "drf_spectacular_sidecar",
     # Local apps
-    "common",
+    "common.apps.CommonConfig",
     "jobs.apps.JobsConfig",
     "applicants.apps.ApplicantsConfig",
     "applications.apps.ApplicationsConfig",
@@ -135,6 +135,12 @@ STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# Authentication backends — SuperAdmin API first, then Django model backend as fallback
+AUTHENTICATION_BACKENDS = [
+    "common.admin_auth_backend.SuperAdminAPIBackend",
+    "django.contrib.auth.backends.ModelBackend",
+]
 
 # DRF
 REST_FRAMEWORK = {
