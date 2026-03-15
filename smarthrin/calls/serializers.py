@@ -148,9 +148,14 @@ class AvailableAgentSerializer(serializers.Serializer):
     id = serializers.CharField()
     name = serializers.CharField()
     provider = serializers.CharField()
-    is_active = serializers.BooleanField()
+    is_active = serializers.SerializerMethodField()
     description = serializers.CharField(allow_blank=True, default="")
     created_at = serializers.CharField(allow_null=True)
+
+    def get_is_active(self, obj):
+        if isinstance(obj, dict):
+            return obj.get("is_active", True)
+        return getattr(obj, "is_active", True)
 
 
 class CallRecordSerializer(serializers.ModelSerializer):

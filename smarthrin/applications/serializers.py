@@ -144,9 +144,6 @@ class ApplicationDetailSerializer(serializers.ModelSerializer):
             "id",
             "tenant_id",
             "owner_user_id",
-            "call_records",
-            "scorecards",
-            "interviews",
             "created_at",
             "updated_at",
         ]
