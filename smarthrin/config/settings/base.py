@@ -29,9 +29,16 @@ JWT_ALGORITHM = env("JWT_ALGORITHM", default="HS256")
 # SuperAdmin
 SUPERADMIN_URL = env("SUPERADMIN_URL", default="https://admin.celiyo.com")
 
-# Voice AI
+# Voice AI Orchestrator
 VOICE_AI_API_URL = env("VOICE_AI_API_URL", default="http://localhost:4000")
 VOICE_AI_API_KEY = env("VOICE_AI_API_KEY", default="")
+
+# Webhooks
+WEBHOOK_SECRET = env("WEBHOOK_SECRET", default="")
+
+# AI Screening Thresholds
+AUTO_SHORTLIST_THRESHOLD = env.float("AUTO_SHORTLIST_THRESHOLD", default=7.0)
+AUTO_REJECT_THRESHOLD = env.float("AUTO_REJECT_THRESHOLD", default=4.0)
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -45,17 +52,19 @@ INSTALLED_APPS = [
     "corsheaders",
     "django_filters",
     "django_celery_beat",
+    "drf_spectacular",
+    "drf_spectacular_sidecar",
     # Local apps
-    "common",
-    "jobs",
-    "applicants",
-    "applications",
-    "interviews",
-    "calls",
-    "pipeline",
+    "common.apps.CommonConfig",
+    "jobs.apps.JobsConfig",
+    "applicants.apps.ApplicantsConfig",
+    "applications.apps.ApplicationsConfig",
+    "interviews.apps.InterviewsConfig",
+    "calls.apps.CallsConfig",
+    "pipeline.apps.PipelineConfig",
     "analytics",
     "webhooks",
-    "notifications",
+    "notifications.apps.NotificationsConfig",
     "integrations",
     "activities",
 ]
@@ -127,6 +136,12 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# Authentication backends — SuperAdmin API first, then Django model backend as fallback
+AUTHENTICATION_BACKENDS = [
+    "common.admin_auth_backend.SuperAdminAPIBackend",
+    "django.contrib.auth.backends.ModelBackend",
+]
+
 # DRF
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ["common.authentication.JWTRequestAuthentication"],
@@ -139,6 +154,35 @@ REST_FRAMEWORK = {
     ],
     "EXCEPTION_HANDLER": "common.exceptions.custom_exception_handler",
     "PAGE_SIZE": 20,
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+# DRF Spectacular — OpenAPI schema generation
+SPECTACULAR_SETTINGS = {
+    "TITLE": "SmartHR-In API",
+    "DESCRIPTION": "HR Recruitment Platform with AI Voice Screening",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "SWAGGER_UI_DIST": "SIDECAR",
+    "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
+    "REDOC_DIST": "SIDECAR",
+    "COMPONENT_SPLIT_REQUEST": True,
+    "SCHEMA_PATH_PREFIX": r"/api/v1",
+    "TAGS": [
+        {"name": "Jobs", "description": "Job posting management"},
+        {"name": "Applicants", "description": "Candidate/applicant records"},
+        {"name": "Applications", "description": "Job applications and pipeline"},
+        {"name": "Calls", "description": "AI voice screening calls"},
+        {"name": "Scorecards", "description": "AI-generated candidate evaluations"},
+        {"name": "Interviews", "description": "Interview scheduling"},
+        {"name": "Pipeline", "description": "Customizable hiring pipeline stages"},
+        {"name": "Analytics", "description": "Recruitment metrics and dashboards"},
+        {"name": "Notifications", "description": "In-app notifications"},
+        {"name": "Activities", "description": "Audit activity feed"},
+        {"name": "Webhooks", "description": "Incoming webhooks from Voice AI"},
+    ],
+    "PREPROCESSING_HOOKS": [],
+    "ENUM_NAME_OVERRIDES": {},
 }
 
 # CORS

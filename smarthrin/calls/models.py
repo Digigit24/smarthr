@@ -44,6 +44,10 @@ class CallRecord(TenantBaseModel):
             models.Index(fields=["provider_call_id"]),
         ]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._original_status = self.status if self.pk else None
+
     def __str__(self) -> str:
         return f"Call {self.provider_call_id or self.id} [{self.status}]"
 
