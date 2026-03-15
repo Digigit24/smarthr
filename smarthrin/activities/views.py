@@ -1,3 +1,5 @@
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter
+from drf_spectacular.types import OpenApiTypes
 from rest_framework import mixins
 from rest_framework.viewsets import GenericViewSet
 from rest_framework.filters import OrderingFilter
@@ -26,6 +28,27 @@ class ActivityFilterSet(django_filters.FilterSet):
         fields = ["verb", "resource_type", "resource_id", "actor_user_id"]
 
 
+@extend_schema_view(
+    list=extend_schema(
+        tags=["Activities"],
+        summary="List activity feed",
+        description="Returns paginated audit activity log for the current tenant. Filterable by resource, verb, and actor.",
+        parameters=[
+            OpenApiParameter("verb", OpenApiTypes.STR, description="Filter by activity verb (e.g. CREATED, STATUS_CHANGED)"),
+            OpenApiParameter("resource_type", OpenApiTypes.STR, description="Filter by resource type (e.g. Job, Application)"),
+            OpenApiParameter("resource_id", OpenApiTypes.UUID, description="Filter by specific resource ID"),
+            OpenApiParameter("actor_user_id", OpenApiTypes.UUID, description="Filter by actor user ID"),
+            OpenApiParameter("created_at_gte", OpenApiTypes.DATETIME, description="Filter: created at or after this datetime"),
+            OpenApiParameter("created_at_lte", OpenApiTypes.DATETIME, description="Filter: created at or before this datetime"),
+        ],
+        responses={200: ActivitySerializer(many=True)},
+    ),
+    retrieve=extend_schema(
+        tags=["Activities"],
+        summary="Get activity entry",
+        responses={200: ActivitySerializer},
+    ),
+)
 class ActivityViewSet(TenantViewSetMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, GenericViewSet):
     """
     Read-only activity feed. Filterable by resource_type, resource_id, verb, actor.

@@ -1,5 +1,6 @@
 from django.utils import timezone
-from rest_framework import mixins, status
+from drf_spectacular.utils import extend_schema, extend_schema_view, inline_serializer
+from rest_framework import mixins, serializers as drf_serializers, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
@@ -12,6 +13,19 @@ from .models import Notification
 from .serializers import NotificationSerializer
 
 
+@extend_schema_view(
+    list=extend_schema(
+        tags=["Notifications"],
+        summary="List notifications",
+        description="Returns paginated list of notifications for the current user.",
+        responses={200: NotificationSerializer(many=True)},
+    ),
+    retrieve=extend_schema(
+        tags=["Notifications"],
+        summary="Get notification",
+        responses={200: NotificationSerializer},
+    ),
+)
 class NotificationViewSet(TenantViewSetMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, GenericViewSet):
     serializer_class = NotificationSerializer
     authentication_classes = [JWTRequestAuthentication]
@@ -24,6 +38,12 @@ class NotificationViewSet(TenantViewSetMixin, mixins.ListModelMixin, mixins.Retr
         )
         return qs
 
+    @extend_schema(
+        tags=["Notifications"],
+        summary="Mark notification as read",
+        request=None,
+        responses={200: NotificationSerializer},
+    )
     @action(detail=True, methods=["patch"], url_path="read")
     def mark_read(self, request, pk=None):
         notification = self.get_object()
@@ -33,6 +53,14 @@ class NotificationViewSet(TenantViewSetMixin, mixins.ListModelMixin, mixins.Retr
             notification.save(update_fields=["is_read", "read_at", "updated_at"])
         return Response(NotificationSerializer(notification).data)
 
+    @extend_schema(
+        tags=["Notifications"],
+        summary="Mark all notifications as read",
+        request=None,
+        responses={200: inline_serializer("MarkAllReadResponse", fields={
+            "marked_read": drf_serializers.IntegerField(),
+        })},
+    )
     @action(detail=False, methods=["post"], url_path="read-all")
     def mark_all_read(self, request):
         count = Notification.objects.filter(
