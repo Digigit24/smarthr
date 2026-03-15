@@ -1,5 +1,6 @@
 """Views for the PipelineStage resource."""
 from django.utils.text import slugify
+from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -11,7 +12,7 @@ from common.pagination import StandardResultsPagination
 from common.permissions import require_permission
 
 from .models import PipelineStage
-from .serializers import PipelineStageSerializer
+from .serializers import PipelineStageSerializer, PipelineStageCreateSerializer, ReorderSerializer
 
 _DEFAULT_STAGES = [
     {"name": "Applied", "order": 0, "color": "#6b7280", "is_terminal": False},
@@ -24,6 +25,42 @@ _DEFAULT_STAGES = [
 ]
 
 
+@extend_schema_view(
+    list=extend_schema(
+        tags=["Pipeline"],
+        summary="List pipeline stages",
+        description="Returns all pipeline stages for the tenant ordered by their display order.",
+        responses={200: PipelineStageSerializer(many=True)},
+    ),
+    create=extend_schema(
+        tags=["Pipeline"],
+        summary="Create pipeline stage",
+        request=PipelineStageCreateSerializer,
+        responses={201: PipelineStageSerializer},
+    ),
+    retrieve=extend_schema(
+        tags=["Pipeline"],
+        summary="Get pipeline stage",
+        responses={200: PipelineStageSerializer},
+    ),
+    update=extend_schema(
+        tags=["Pipeline"],
+        summary="Update pipeline stage",
+        request=PipelineStageCreateSerializer,
+        responses={200: PipelineStageSerializer},
+    ),
+    partial_update=extend_schema(
+        tags=["Pipeline"],
+        summary="Partial update pipeline stage",
+        request=PipelineStageCreateSerializer,
+        responses={200: PipelineStageSerializer},
+    ),
+    destroy=extend_schema(
+        tags=["Pipeline"],
+        summary="Delete pipeline stage",
+        responses={204: None},
+    ),
+)
 class PipelineStageViewSet(TenantViewSetMixin, ModelViewSet):
     """CRUD + reorder + seed-defaults actions for PipelineStage."""
 
@@ -49,6 +86,13 @@ class PipelineStageViewSet(TenantViewSetMixin, ModelViewSet):
         )
         return [perm_class()]
 
+    @extend_schema(
+        tags=["Pipeline"],
+        summary="Reorder pipeline stages",
+        description="Sets display order for pipeline stages by providing an ordered list of stage IDs.",
+        request=ReorderSerializer,
+        responses={200: PipelineStageSerializer(many=True)},
+    )
     @action(detail=False, methods=["post"], url_path="reorder")
     def reorder(self, request):
         """
@@ -84,6 +128,13 @@ class PipelineStageViewSet(TenantViewSetMixin, ModelViewSet):
         serializer = self.get_serializer(updated_stages, many=True)
         return Response(serializer.data)
 
+    @extend_schema(
+        tags=["Pipeline"],
+        summary="Seed default pipeline stages",
+        description="Creates the 7 default pipeline stages (Applied, AI Screening, Shortlisted, Interview, Offer, Hired, Rejected) if they don't already exist.",
+        request=None,
+        responses={200: PipelineStageSerializer(many=True)},
+    )
     @action(detail=False, methods=["post"], url_path="seed-defaults")
     def seed_defaults(self, request):
         """

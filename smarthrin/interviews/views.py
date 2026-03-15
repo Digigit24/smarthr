@@ -1,4 +1,6 @@
 """Views for the Interview resource."""
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter
+from drf_spectacular.types import OpenApiTypes
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -13,9 +15,52 @@ from common.permissions import require_permission
 
 from .filters import InterviewFilterSet
 from .models import Interview
-from .serializers import InterviewDetailSerializer, InterviewListSerializer
+from .serializers import InterviewDetailSerializer, InterviewListSerializer, InterviewCreateSerializer, CompleteInterviewSerializer
 
 
+@extend_schema_view(
+    list=extend_schema(
+        tags=["Interviews"],
+        summary="List interviews",
+        description="Returns paginated list of interviews for the tenant.",
+        parameters=[
+            OpenApiParameter("status", OpenApiTypes.STR,
+                enum=["SCHEDULED", "CONFIRMED", "IN_PROGRESS", "COMPLETED", "CANCELLED", "NO_SHOW"],
+                description="Filter by interview status"),
+            OpenApiParameter("application_id", OpenApiTypes.UUID, description="Filter by application ID"),
+            OpenApiParameter("interview_type", OpenApiTypes.STR, description="Filter by interview type"),
+        ],
+        responses={200: InterviewListSerializer(many=True)},
+    ),
+    create=extend_schema(
+        tags=["Interviews"],
+        summary="Schedule an interview",
+        request=InterviewCreateSerializer,
+        responses={201: InterviewDetailSerializer},
+    ),
+    retrieve=extend_schema(
+        tags=["Interviews"],
+        summary="Get interview details",
+        responses={200: InterviewDetailSerializer},
+    ),
+    update=extend_schema(
+        tags=["Interviews"],
+        summary="Update interview",
+        request=InterviewCreateSerializer,
+        responses={200: InterviewDetailSerializer},
+    ),
+    partial_update=extend_schema(
+        tags=["Interviews"],
+        summary="Partial update interview",
+        request=InterviewCreateSerializer,
+        responses={200: InterviewDetailSerializer},
+    ),
+    destroy=extend_schema(
+        tags=["Interviews"],
+        summary="Delete interview",
+        responses={204: None},
+    ),
+)
 class InterviewViewSet(TenantViewSetMixin, ModelViewSet):
     """CRUD + cancel/complete extra actions for Interview."""
 
@@ -45,6 +90,8 @@ class InterviewViewSet(TenantViewSetMixin, ModelViewSet):
     def get_serializer_class(self):
         if self.action == "list":
             return InterviewListSerializer
+        if self.action in ("create", "update", "partial_update"):
+            return InterviewCreateSerializer
         return InterviewDetailSerializer
 
     def perform_create(self, serializer):
@@ -63,6 +110,13 @@ class InterviewViewSet(TenantViewSetMixin, ModelViewSet):
             },
         )
 
+    @extend_schema(
+        tags=["Interviews"],
+        summary="Cancel interview",
+        description="Sets the interview status to CANCELLED.",
+        request=None,
+        responses={200: InterviewDetailSerializer},
+    )
     @action(detail=True, methods=["post"], url_path="cancel")
     def cancel(self, request, pk=None):
         """Cancel an interview — sets status to CANCELLED."""
@@ -83,6 +137,13 @@ class InterviewViewSet(TenantViewSetMixin, ModelViewSet):
         serializer = self.get_serializer(interview)
         return Response(serializer.data)
 
+    @extend_schema(
+        tags=["Interviews"],
+        summary="Complete interview",
+        description="Marks the interview as COMPLETED. Optionally records feedback and rating (1-5).",
+        request=CompleteInterviewSerializer,
+        responses={200: InterviewDetailSerializer},
+    )
     @action(detail=True, methods=["post"], url_path="complete")
     def complete(self, request, pk=None):
         """

@@ -8,6 +8,7 @@ PUBLIC_PATHS = [
     "/admin/",
     "/api/docs/",
     "/api/schema/",
+    "/api/redoc/",
     "/auth/",
     "/static/",
     "/webhooks/",

@@ -115,3 +115,31 @@ class CallRecordDetailSerializer(serializers.ModelSerializer):
         if scorecard is None:
             return None
         return ScorecardSerializer(scorecard, context=self.context).data
+
+
+class RetryCallSerializer(serializers.Serializer):
+    """Request body for retry-call action (no required fields)."""
+    pass
+
+
+class AvailableAgentSerializer(serializers.Serializer):
+    """Represents a single Voice AI agent returned by the orchestrator."""
+    id = serializers.CharField()
+    name = serializers.CharField()
+    provider = serializers.CharField()
+    is_active = serializers.BooleanField()
+    description = serializers.CharField(allow_blank=True, default="")
+    created_at = serializers.CharField(allow_null=True)
+
+
+class CallRecordSerializer(serializers.ModelSerializer):
+    """Alias used by applications/views.py trigger_ai_call for response."""
+    class Meta:
+        model = CallRecord
+        fields = [
+            "id", "application_id", "provider", "voice_agent_id",
+            "provider_call_id", "phone", "status", "duration",
+            "summary", "recording_url", "started_at", "ended_at",
+            "error_message", "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
