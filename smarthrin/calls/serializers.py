@@ -73,10 +73,19 @@ class CallRecordListSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at"]
 
 
+class CallRecordQueueItemSerializer(serializers.Serializer):
+    """Nested queue item info for call record detail."""
+    queue_item_id = serializers.UUIDField()
+    queue_id = serializers.UUIDField()
+    queue_name = serializers.CharField()
+    position = serializers.IntegerField()
+
+
 class CallRecordDetailSerializer(serializers.ModelSerializer):
-    """Full serializer for CallRecord detail views — includes nested scorecard."""
+    """Full serializer for CallRecord detail views — includes nested scorecard and queue info."""
 
     scorecard = serializers.SerializerMethodField()
+    queue_item = serializers.SerializerMethodField()
 
     class Meta:
         model = CallRecord
@@ -101,6 +110,7 @@ class CallRecordDetailSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "scorecard",
+            "queue_item",
         ]
         read_only_fields = [
             "id",
@@ -115,6 +125,17 @@ class CallRecordDetailSerializer(serializers.ModelSerializer):
         if scorecard is None:
             return None
         return ScorecardSerializer(scorecard, context=self.context).data
+
+    def get_queue_item(self, call_record: CallRecord):
+        queue_item = call_record.queue_items.select_related("queue").first()
+        if queue_item is None:
+            return None
+        return {
+            "queue_item_id": str(queue_item.id),
+            "queue_id": str(queue_item.queue_id),
+            "queue_name": queue_item.queue.name,
+            "position": queue_item.position,
+        }
 
 
 class RetryCallSerializer(serializers.Serializer):

@@ -24,7 +24,7 @@ from common.permissions import require_permission
 
 from .filters import JobFilterSet
 from .models import Job
-from .serializers import JobCreateSerializer, JobDetailSerializer, JobListSerializer
+from .serializers import JobCreateSerializer, JobDetailSerializer, JobListSerializer, JobVoiceConfigSerializer
 
 
 @extend_schema_view(
@@ -108,6 +108,7 @@ class JobViewSet(TenantViewSetMixin, ModelViewSet):
             "close": require_permission("smarthrin.jobs.edit"),
             "applications": require_permission("smarthrin.applications.view"),
             "stats": require_permission("smarthrin.jobs.view"),
+            "voice_config": require_permission("smarthrin.jobs.edit"),
         }
         perm_class = action_permission_map.get(
             self.action, require_permission("smarthrin.jobs.view")
@@ -242,3 +243,48 @@ class JobViewSet(TenantViewSetMixin, ModelViewSet):
                 "total_applications": aggregates["total"],
             }
         )
+
+    @extend_schema(
+        tags=["Jobs"],
+        summary="Update job voice config",
+        description=(
+            "Update the voice_agent_id and voice_agent_config for a job. "
+            "Used by the frontend to assign a CeliyoVoice agent to a job."
+        ),
+        request=JobVoiceConfigSerializer,
+        responses={200: JobDetailSerializer},
+    )
+    @action(detail=True, methods=["patch"], url_path="voice-config", url_name="voice-config")
+    def voice_config(self, request, pk=None):
+        """Update voice agent ID and config for a job."""
+        job = self.get_object()
+        serializer = JobVoiceConfigSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+
+        before = {
+            "voice_agent_id": job.voice_agent_id,
+            "voice_agent_config": job.voice_agent_config,
+        }
+
+        update_fields = ["updated_at"]
+        if "voice_agent_id" in serializer.validated_data:
+            job.voice_agent_id = serializer.validated_data["voice_agent_id"]
+            update_fields.append("voice_agent_id")
+        if "voice_agent_config" in serializer.validated_data:
+            job.voice_agent_config = serializer.validated_data["voice_agent_config"]
+            update_fields.append("voice_agent_config")
+
+        job.save(update_fields=update_fields)
+
+        log_activity_for_request(
+            request,
+            verb=Activity.Verb.UPDATED,
+            resource=job,
+            before=before,
+            after={
+                "voice_agent_id": job.voice_agent_id,
+                "voice_agent_config": job.voice_agent_config,
+            },
+            metadata={"field": "voice_config"},
+        )
+        return Response(JobDetailSerializer(job).data)

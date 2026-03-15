@@ -35,6 +35,8 @@ urlpatterns = [
     path("api/v1/analytics/", include("analytics.urls")),
     path("api/v1/notifications/", include("notifications.urls")),
     path("api/v1/activities/", include("activities.urls")),
+    path("api/v1/call-queues/", include("call_queue.urls")),
+    path("api/v1/voice-agents/", include("calls.voice_agent_urls")),
     # Webhooks (no auth)
     path("webhooks/", include("webhooks.urls")),
 ]
