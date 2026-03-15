@@ -1,2 +1,5 @@
 smarthrin/**/__pycache__
 smarthrin/**/*.pyc
+
+# API request/response logs
+alogs/

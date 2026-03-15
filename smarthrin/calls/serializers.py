@@ -131,6 +131,19 @@ class AvailableAgentSerializer(serializers.Serializer):
     description = serializers.CharField(allow_blank=True, default="")
     created_at = serializers.CharField(allow_null=True)
 
+    def to_representation(self, instance):
+        # Voice backend returns camelCase keys — normalize to snake_case before serializing
+        if isinstance(instance, dict):
+            instance = {
+                "id": instance.get("id", ""),
+                "name": instance.get("name", ""),
+                "provider": instance.get("provider", ""),
+                "is_active": instance.get("is_active", instance.get("isActive", False)),
+                "description": instance.get("description", ""),
+                "created_at": instance.get("created_at", instance.get("createdAt")),
+            }
+        return super().to_representation(instance)
+
 
 class CallRecordSerializer(serializers.ModelSerializer):
     """Alias used by applications/views.py trigger_ai_call for response."""
