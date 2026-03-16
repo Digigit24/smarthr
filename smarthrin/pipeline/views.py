@@ -68,6 +68,7 @@ class PipelineStageViewSet(TenantViewSetMixin, ModelViewSet):
     authentication_classes = [JWTRequestAuthentication]
     pagination_class = StandardResultsPagination
     serializer_class = PipelineStageSerializer
+    search_fields = ["name", "slug"]
     ordering_fields = ["order", "created_at"]
 
     def get_permissions(self):

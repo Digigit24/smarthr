@@ -73,6 +73,7 @@ class CallQueueViewSet(TenantViewSetMixin, ModelViewSet):
     authentication_classes = [JWTRequestAuthentication]
     pagination_class = StandardResultsPagination
     filterset_class = CallQueueFilterSet
+    search_fields = ["name", "job__title", "job__department"]
     ordering_fields = ["created_at", "updated_at", "name", "status"]
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 

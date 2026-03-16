@@ -50,6 +50,7 @@ class CallRecordViewSet(TenantViewSetMixin, ReadOnlyModelViewSet):
     authentication_classes = [JWTRequestAuthentication]
     pagination_class = StandardResultsPagination
     filterset_class = CallRecordFilterSet
+    search_fields = ["phone", "summary", "provider_call_id", "application__applicant__first_name", "application__applicant__last_name", "application__applicant__email"]
     ordering_fields = ["created_at", "started_at"]
 
     def get_permissions(self):
@@ -123,6 +124,7 @@ class ScorecardViewSet(TenantViewSetMixin, ReadOnlyModelViewSet):
     authentication_classes = [JWTRequestAuthentication]
     pagination_class = StandardResultsPagination
     filterset_class = ScorecardFilterSet
+    search_fields = ["summary", "recommendation", "application__applicant__first_name", "application__applicant__last_name", "application__applicant__email"]
     ordering_fields = ["created_at", "overall_score"]
 
     def get_permissions(self):

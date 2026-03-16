@@ -30,6 +30,9 @@ class NotificationViewSet(TenantViewSetMixin, mixins.ListModelMixin, mixins.Retr
     serializer_class = NotificationSerializer
     authentication_classes = [JWTRequestAuthentication]
     pagination_class = StandardResultsPagination
+    search_fields = ["title", "message", "category"]
+    ordering_fields = ["created_at", "is_read", "category"]
+    ordering = ["-created_at"]
 
     def get_queryset(self):
         qs = Notification.objects.filter(
