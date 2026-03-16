@@ -73,9 +73,11 @@ class VoiceAIClient:
                 **kwargs,
             )
         except requests.ConnectionError as exc:
-            raise VoiceAIProviderError(f"Cannot connect to Voice AI service at {self.base_url}: {exc}") from exc
+            logger.error("Cannot connect to Voice AI service at %s: %s", self.base_url, exc)
+            raise VoiceAIProviderError("Voice AI service is currently unavailable") from exc
         except requests.Timeout as exc:
-            raise VoiceAIProviderError(f"Voice AI request timed out after {self.timeout}s") from exc
+            logger.error("Voice AI request timed out after %ss", self.timeout)
+            raise VoiceAIProviderError("Voice AI service request timed out") from exc
 
         logger.debug(f"VoiceAI response: {resp.status_code}")
 
