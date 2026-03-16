@@ -2,7 +2,7 @@ from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiPara
 from drf_spectacular.types import OpenApiTypes
 from rest_framework import mixins
 from rest_framework.viewsets import GenericViewSet
-from rest_framework.filters import OrderingFilter
+from rest_framework.filters import OrderingFilter, SearchFilter
 from django_filters.rest_framework import DjangoFilterBackend
 import django_filters
 
@@ -57,8 +57,9 @@ class ActivityViewSet(TenantViewSetMixin, mixins.ListModelMixin, mixins.Retrieve
     serializer_class = ActivitySerializer
     authentication_classes = [JWTRequestAuthentication]
     pagination_class = StandardResultsPagination
-    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    filter_backends = [DjangoFilterBackend, OrderingFilter, SearchFilter]
     filterset_class = ActivityFilterSet
+    search_fields = ["verb", "resource_type", "resource_label", "actor_email"]
     ordering_fields = ["created_at"]
     ordering = ["-created_at"]
 
