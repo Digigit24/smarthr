@@ -3,6 +3,7 @@ import logging
 
 import requests as http_requests
 from django.conf import settings
+from drf_spectacular.utils import extend_schema
 from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -23,6 +24,7 @@ class LoginProxyView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
 
+    @extend_schema(request=LoginSerializer, responses={200: None})
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
