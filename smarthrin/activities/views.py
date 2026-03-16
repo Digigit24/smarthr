@@ -20,6 +20,8 @@ class ActivityFilterSet(django_filters.FilterSet):
     resource_type = django_filters.CharFilter(lookup_expr="exact")
     resource_id = django_filters.UUIDFilter(lookup_expr="exact")
     actor_user_id = django_filters.UUIDFilter(lookup_expr="exact")
+    created_after = django_filters.DateTimeFilter(field_name="created_at", lookup_expr="gte")
+    created_before = django_filters.DateTimeFilter(field_name="created_at", lookup_expr="lte")
     created_at_gte = django_filters.DateTimeFilter(field_name="created_at", lookup_expr="gte")
     created_at_lte = django_filters.DateTimeFilter(field_name="created_at", lookup_expr="lte")
 
@@ -38,8 +40,10 @@ class ActivityFilterSet(django_filters.FilterSet):
             OpenApiParameter("resource_type", OpenApiTypes.STR, description="Filter by resource type (e.g. Job, Application)"),
             OpenApiParameter("resource_id", OpenApiTypes.UUID, description="Filter by specific resource ID"),
             OpenApiParameter("actor_user_id", OpenApiTypes.UUID, description="Filter by actor user ID"),
-            OpenApiParameter("created_at_gte", OpenApiTypes.DATETIME, description="Filter: created at or after this datetime"),
-            OpenApiParameter("created_at_lte", OpenApiTypes.DATETIME, description="Filter: created at or before this datetime"),
+            OpenApiParameter("created_after", OpenApiTypes.DATETIME, description="Filter: created at or after this datetime"),
+            OpenApiParameter("created_before", OpenApiTypes.DATETIME, description="Filter: created at or before this datetime"),
+            OpenApiParameter("created_at_gte", OpenApiTypes.DATETIME, description="Alias for created_after"),
+            OpenApiParameter("created_at_lte", OpenApiTypes.DATETIME, description="Alias for created_before"),
         ],
         responses={200: ActivitySerializer(many=True)},
     ),
