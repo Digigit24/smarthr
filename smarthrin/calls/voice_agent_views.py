@@ -72,7 +72,11 @@ class VoiceAgentListView(APIView):
             )
         except VoiceAIError as exc:
             logger.error(f"VoiceAI error listing agents: {exc}")
-            return Response({"detail": str(exc)}, status=exc.status_code if hasattr(exc, "status_code") else 502)
+            status_code = getattr(exc, "status_code", 502)
+            return Response(
+                {"detail": str(exc), "code": "VOICE_SERVICE_UNAVAILABLE"},
+                status=status_code,
+            )
 
         # Normalize response — orchestrator may return { items: [...] } or a list
         if isinstance(data, dict):
@@ -115,7 +119,11 @@ class VoiceAgentDetailView(APIView):
             )
         except VoiceAIError as exc:
             logger.error(f"VoiceAI error getting agent {agent_id}: {exc}")
-            return Response({"detail": str(exc)}, status=exc.status_code if hasattr(exc, "status_code") else 502)
+            status_code = getattr(exc, "status_code", 502)
+            return Response(
+                {"detail": str(exc), "code": "VOICE_SERVICE_UNAVAILABLE"},
+                status=status_code,
+            )
 
         serializer = AvailableAgentSerializer(agent)
         return Response(serializer.data)
