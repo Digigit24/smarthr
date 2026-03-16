@@ -147,6 +147,12 @@ class ApplicationDetailSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        extra_kwargs = {
+            "tenant_id": {"required": False},
+            "owner_user_id": {"required": False},
+            "job_id": {"required": False},
+            "applicant_id": {"required": False},
+        }
 
 
 class ApplicationCreateSerializer(serializers.ModelSerializer):
