@@ -6,6 +6,8 @@ from django.http import JsonResponse
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 
+from common.auth_views import LoginProxyView
+
 
 def health_check(request):
     return JsonResponse(
@@ -24,6 +26,8 @@ urlpatterns = [
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
     path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
+    # Auth (public — no JWT required)
+    path("api/auth/login/", LoginProxyView.as_view(), name="auth-login"),
     # API v1
     path("api/v1/jobs/", include("jobs.urls")),
     path("api/v1/applicants/", include("applicants.urls")),
