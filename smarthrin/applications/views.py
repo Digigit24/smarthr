@@ -152,6 +152,14 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
             from jobs.models import Job
             Job.objects.filter(pk=job.pk).update(application_count=F("application_count") + 1)
 
+    def perform_update(self, serializer):
+        instance = serializer.save(tenant_id=self.request.tenant_id)
+        log_activity_for_request(
+            self.request,
+            verb=Activity.Verb.UPDATED,
+            resource=instance,
+        )
+
     # ------------------------------------------------------------------
     # Extra actions
     # ------------------------------------------------------------------
