@@ -232,9 +232,9 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
 
         application = self.get_object()
         call_record = trigger_ai_screening_call(
-            application=application,
-            tenant_id=request.tenant_id,
-            owner_user_id=request.user_id,
+            application_id=str(application.pk),
+            tenant_id=str(request.tenant_id),
+            owner_user_id=str(request.user_id),
         )
 
         log_activity_for_request(
