@@ -144,18 +144,27 @@ class RetryCallSerializer(serializers.Serializer):
 
 
 class AvailableAgentSerializer(serializers.Serializer):
-    """Represents a single Voice AI agent returned by the orchestrator."""
+    """Represents a single Voice AI agent returned by the orchestrator.
+
+    The orchestrator may return camelCase keys (isActive, createdAt)
+    so we use SerializerMethodField to handle both naming conventions.
+    """
     id = serializers.CharField()
     name = serializers.CharField()
-    provider = serializers.CharField()
+    provider = serializers.CharField(required=False, default="")
     is_active = serializers.SerializerMethodField()
-    description = serializers.CharField(allow_blank=True, default="")
-    created_at = serializers.CharField(allow_null=True)
+    description = serializers.CharField(allow_blank=True, required=False, default="")
+    created_at = serializers.SerializerMethodField()
 
     def get_is_active(self, obj):
         if isinstance(obj, dict):
-            return obj.get("is_active", True)
-        return getattr(obj, "is_active", True)
+            return obj.get("is_active", obj.get("isActive", True))
+        return getattr(obj, "is_active", getattr(obj, "isActive", True))
+
+    def get_created_at(self, obj):
+        if isinstance(obj, dict):
+            return obj.get("created_at", obj.get("createdAt"))
+        return getattr(obj, "created_at", getattr(obj, "createdAt", None))
 
 
 class CallRecordSerializer(serializers.ModelSerializer):

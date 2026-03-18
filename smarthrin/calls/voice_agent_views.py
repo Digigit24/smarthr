@@ -79,9 +79,19 @@ class VoiceAgentListView(APIView):
                 status=status_code,
             )
 
-        # Normalize response — orchestrator may return { items: [...] } or a list
+        # Normalize response — orchestrator may return various shapes:
+        # { items: [...] }, { agents: [...] }, { data: [...] }, or a plain list.
+        # Note: VoiceAIClient._request() already unwraps top-level { data: ... }.
+        logger.debug(f"VoiceAI list_agents raw response type={type(data).__name__}: {data}")
+
         if isinstance(data, dict):
-            agents = data.get("items", data.get("agents", data.get("data", [])))
+            agents = (
+                data.get("items")
+                or data.get("agents")
+                or data.get("data")
+                or data.get("results")
+                or []
+            )
         elif isinstance(data, list):
             agents = data
         else:
