@@ -73,8 +73,9 @@ class VoiceAgentListView(APIView):
         except VoiceAIError as exc:
             logger.error(f"VoiceAI error listing agents: {exc}")
             status_code = getattr(exc, "status_code", 502)
+            exc_code = getattr(exc, "code", "VOICE_SERVICE_UNAVAILABLE")
             return Response(
-                {"detail": str(exc), "code": "VOICE_SERVICE_UNAVAILABLE"},
+                {"detail": exc.message, "code": exc_code},
                 status=status_code,
             )
 
@@ -120,8 +121,9 @@ class VoiceAgentDetailView(APIView):
         except VoiceAIError as exc:
             logger.error(f"VoiceAI error getting agent {agent_id}: {exc}")
             status_code = getattr(exc, "status_code", 502)
+            exc_code = getattr(exc, "code", "VOICE_SERVICE_UNAVAILABLE")
             return Response(
-                {"detail": str(exc), "code": "VOICE_SERVICE_UNAVAILABLE"},
+                {"detail": exc.message, "code": exc_code},
                 status=status_code,
             )
 
