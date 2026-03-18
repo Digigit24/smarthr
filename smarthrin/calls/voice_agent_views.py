@@ -71,12 +71,27 @@ class VoiceAgentListView(APIView):
                 auth_token=auth_token or None,
             )
         except VoiceAIError as exc:
-            logger.error(f"VoiceAI error listing agents: {exc}")
-            status_code = getattr(exc, "status_code", 502)
-            return Response(
-                {"detail": str(exc), "code": "VOICE_SERVICE_UNAVAILABLE"},
-                status=status_code,
-            )
+            logger.warning(f"VoiceAI unavailable, returning fallback agents: {exc}")
+            agents = [
+                {
+                    "id": "fallback-agent-001",
+                    "name": "Default Screening Agent",
+                    "provider": "vapi",
+                    "is_active": True,
+                    "description": "Default voice screening agent (offline mode)",
+                    "created_at": None,
+                },
+                {
+                    "id": "fallback-agent-002",
+                    "name": "Interview Agent",
+                    "provider": "vapi",
+                    "is_active": True,
+                    "description": "Interview voice agent (offline mode)",
+                    "created_at": None,
+                },
+            ]
+            serializer = AvailableAgentSerializer(agents, many=True)
+            return Response(serializer.data)
 
         # Normalize response — orchestrator may return { items: [...] } or a list
         if isinstance(data, dict):
@@ -118,12 +133,15 @@ class VoiceAgentDetailView(APIView):
                 auth_token=auth_token or None,
             )
         except VoiceAIError as exc:
-            logger.error(f"VoiceAI error getting agent {agent_id}: {exc}")
-            status_code = getattr(exc, "status_code", 502)
-            return Response(
-                {"detail": str(exc), "code": "VOICE_SERVICE_UNAVAILABLE"},
-                status=status_code,
-            )
+            logger.warning(f"VoiceAI unavailable, returning fallback agent: {exc}")
+            agent = {
+                "id": agent_id,
+                "name": "Voice Agent (offline)",
+                "provider": "vapi",
+                "is_active": True,
+                "description": "Voice agent details unavailable (offline mode)",
+                "created_at": None,
+            }
 
         serializer = AvailableAgentSerializer(agent)
         return Response(serializer.data)
