@@ -19,7 +19,7 @@ class Command(BaseCommand):
     help = "Seed demo data for a given tenant"
 
     def add_arguments(self, parser):
-        parser.add_argument("--tenant-id", required=True, help="Tenant UUID to seed data for")
+        parser.add_argument("--tenant-id", default="0f1844d5-b1b2-4b21-8d3d-f8f34887cf7b", help="Tenant UUID to seed data for")
         parser.add_argument(
             "--owner-id",
             default=OWNER_USER_ID_DEFAULT,
