@@ -64,7 +64,7 @@ from .serializers import InterviewDetailSerializer, InterviewListSerializer, Int
 class InterviewViewSet(TenantViewSetMixin, ModelViewSet):
     """CRUD + cancel/complete extra actions for Interview."""
 
-    queryset = Interview.objects.select_related("application").all()
+    queryset = Interview.objects.select_related("application", "application__applicant").all()
     authentication_classes = [JWTRequestAuthentication]
     pagination_class = StandardResultsPagination
     filterset_class = InterviewFilterSet
@@ -93,6 +93,13 @@ class InterviewViewSet(TenantViewSetMixin, ModelViewSet):
         if self.action in ("create", "update", "partial_update"):
             return InterviewCreateSerializer
         return InterviewDetailSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        response_serializer = InterviewDetailSerializer(serializer.instance)
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
     def perform_create(self, serializer):
         super().perform_create(serializer)
