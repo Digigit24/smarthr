@@ -236,11 +236,19 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
 
         application = self.get_object()
 
+        # Extract JWT token from request to forward to Voice AI Orchestrator,
+        # since both services share the same JWT secret.
+        auth_token = None
+        auth_header = request.META.get("HTTP_AUTHORIZATION", "")
+        if auth_header.startswith("Bearer "):
+            auth_token = auth_header[7:]
+
         try:
             call_record = trigger_ai_screening_call(
                 application_id=str(application.pk),
                 tenant_id=str(request.tenant_id),
                 owner_user_id=str(request.user_id),
+                auth_token=auth_token,
             )
         except ValueError as exc:
             raise ValidationError({"detail": str(exc)})

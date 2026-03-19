@@ -40,6 +40,7 @@ class AIScreeningService:
         application_id: str,
         tenant_id: str,
         owner_user_id: str,
+        auth_token: Optional[str] = None,
     ) -> "CallRecord":  # noqa: F821
         """
         Full screening call dispatch flow:
@@ -141,6 +142,7 @@ class AIScreeningService:
                 phone=phone,
                 call_context=call_context,
                 metadata=metadata,
+                auth_token=auth_token,
             )
             # response = { id, status, agentId, phone, provider, createdAt }
             call_record.provider_call_id = response.get("id", "")
@@ -232,7 +234,8 @@ def trigger_ai_screening_call(
     application_id: str,
     tenant_id: str,
     owner_user_id: str,
+    auth_token: Optional[str] = None,
 ) -> Any:
     """Thin wrapper around AIScreeningService.trigger_screening_call."""
     service = AIScreeningService()
-    return service.trigger_screening_call(application_id, tenant_id, owner_user_id)
+    return service.trigger_screening_call(application_id, tenant_id, owner_user_id, auth_token=auth_token)

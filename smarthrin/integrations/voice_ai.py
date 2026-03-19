@@ -191,6 +191,7 @@ class VoiceAIClient:
         call_context: Optional[dict] = None,
         metadata: Optional[dict] = None,
         from_number_id: Optional[str] = None,
+        auth_token: Optional[str] = None,
     ) -> dict:
         """
         POST /api/v1/calls/start
@@ -206,7 +207,7 @@ class VoiceAIClient:
             payload["callContext"] = call_context
         if metadata:
             payload["metadata"] = metadata
-        return self._request("POST", "/api/v1/calls/start", tenant_id, json=payload)
+        return self._request("POST", "/api/v1/calls/start", tenant_id, auth_token=auth_token, json=payload)
 
     def end_call(self, tenant_id: str, call_id: str) -> dict:
         """POST /api/v1/calls/:id/end"""
