@@ -1,4 +1,5 @@
 """Views for Application resource."""
+import logging
 import uuid
 from django.db import transaction
 from django.db.models import F
@@ -9,6 +10,8 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
+
+logger = logging.getLogger(__name__)
 
 from activities.models import Activity
 from activities.services import log_activity, log_activity_for_request
@@ -249,6 +252,16 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
                     "details": exc.details,
                 },
                 status=exc.status_code,
+            )
+        except Exception as exc:
+            logger.exception("Unexpected error triggering AI call for application %s", pk)
+            return Response(
+                {
+                    "error": str(exc) or "An unexpected error occurred while triggering the AI call.",
+                    "code": "INTERNAL_ERROR",
+                    "details": {},
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
         log_activity_for_request(
