@@ -27,6 +27,9 @@ class InterviewListSerializer(serializers.ModelSerializer):
 class InterviewDetailSerializer(serializers.ModelSerializer):
     """Full serializer for Interview detail views and create/update."""
 
+    applicant_name = serializers.SerializerMethodField()
+    applicant_email = serializers.SerializerMethodField()
+
     class Meta:
         model = Interview
         fields = [
@@ -45,10 +48,24 @@ class InterviewDetailSerializer(serializers.ModelSerializer):
             "calendar_event_id",
             "feedback",
             "rating",
+            "applicant_name",
+            "applicant_email",
             "created_at",
             "updated_at",
         ]
         read_only_fields = ["id", "tenant_id", "owner_user_id", "created_at", "updated_at"]
+
+    def get_applicant_name(self, obj):
+        try:
+            return obj.application.applicant.full_name
+        except AttributeError:
+            return ""
+
+    def get_applicant_email(self, obj):
+        try:
+            return obj.application.applicant.email
+        except AttributeError:
+            return ""
 
 
 class InterviewCreateSerializer(serializers.ModelSerializer):
