@@ -24,7 +24,12 @@ def on_call_record_saved(sender, instance, created, **kwargs):
         # Queue scorecard generation
         try:
             from calls.tasks import generate_scorecard
-            generate_scorecard.delay(str(instance.id), str(instance.tenant_id))
+            generate_scorecard.apply_async(
+                args=[str(instance.id), str(instance.tenant_id)],
+                retry=False,
+                broker_connection_timeout=3,
+                broker_connection_retry=False,
+            )
         except Exception as exc:
             logger.error(f"Failed to queue scorecard generation for call {instance.id}: {exc}")
 

@@ -55,10 +55,11 @@ def on_application_saved(sender, instance, created, **kwargs):
         # Dispatch AI call via Celery
         try:
             from calls.tasks import dispatch_ai_call
-            dispatch_ai_call.delay(
-                str(instance.id),
-                str(instance.tenant_id),
-                str(instance.owner_user_id),
+            dispatch_ai_call.apply_async(
+                args=[str(instance.id), str(instance.tenant_id), str(instance.owner_user_id)],
+                retry=False,
+                broker_connection_timeout=3,
+                broker_connection_retry=False,
             )
         except Exception as exc:
             logger.error(f"Failed to queue AI call dispatch for application {instance.id}: {exc}")

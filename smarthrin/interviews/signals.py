@@ -33,10 +33,16 @@ def on_interview_saved(sender, instance, created, **kwargs):
         except Exception as exc:
             logger.warning(f"Failed to create interview-scheduled notification: {exc}")
 
-        # Queue email notification stub
+        # Queue email notification stub (apply_async with a short broker timeout
+        # so the request doesn't hang if Redis/Celery is unavailable)
         try:
             from calls.tasks import send_interview_notification_email
-            send_interview_notification_email.delay(str(instance.id))
+            send_interview_notification_email.apply_async(
+                args=[str(instance.id)],
+                retry=False,
+                broker_connection_timeout=3,
+                broker_connection_retry=False,
+            )
         except Exception as exc:
             logger.warning(f"Failed to queue interview email task: {exc}")
         return
