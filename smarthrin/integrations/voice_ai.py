@@ -26,14 +26,17 @@ class VoiceAIClient:
     """
 
     def __init__(self) -> None:
-        self.base_url = settings.VOICE_AI_API_URL.rstrip("/")
-        self.api_key = settings.VOICE_AI_API_KEY
+        self.base_url = getattr(settings, "VOICE_AI_API_URL", "").rstrip("/")
+        self.api_key = getattr(settings, "VOICE_AI_API_KEY", "")
         self.timeout = 30
         self._session = requests.Session()
         self._session.headers.update({
             "Content-Type": "application/json",
             "Accept": "application/json",
         })
+
+        if not self.base_url:
+            logger.warning("VOICE_AI_API_URL is not configured")
 
     def _headers(self, tenant_id: Optional[str] = None, auth_token: Optional[str] = None) -> dict[str, str]:
         bearer = auth_token if auth_token else self.api_key
@@ -60,6 +63,11 @@ class VoiceAIClient:
                         Use when proxying requests on behalf of an authenticated user,
                         since both SmartHR and CeliyoVoice share the same JWT secret.
         """
+        if not self.base_url:
+            raise VoiceAIProviderError(
+                "Voice AI service is not configured. Set VOICE_AI_API_URL in environment."
+            )
+
         url = f"{self.base_url}{path}"
         headers = self._headers(tenant_id, auth_token=auth_token)
         logger.debug(f"VoiceAI {method} {url} tenant={tenant_id}")
@@ -183,6 +191,7 @@ class VoiceAIClient:
         call_context: Optional[dict] = None,
         metadata: Optional[dict] = None,
         from_number_id: Optional[str] = None,
+        auth_token: Optional[str] = None,
     ) -> dict:
         """
         POST /api/v1/calls/start
@@ -198,7 +207,7 @@ class VoiceAIClient:
             payload["callContext"] = call_context
         if metadata:
             payload["metadata"] = metadata
-        return self._request("POST", "/api/v1/calls/start", tenant_id, json=payload)
+        return self._request("POST", "/api/v1/calls/start", tenant_id, auth_token=auth_token, json=payload)
 
     def end_call(self, tenant_id: str, call_id: str) -> dict:
         """POST /api/v1/calls/:id/end"""

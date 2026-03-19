@@ -30,6 +30,22 @@ class ApplicantCreateSerializer(serializers.ModelSerializer):
             "notes", "source", "tags",
         ]
 
+    def validate_email(self, value):
+        request = self.context.get("request")
+        if not request:
+            return value
+        tenant_id = getattr(request, "tenant_id", None)
+        if not tenant_id:
+            return value
+        qs = Applicant.objects.filter(tenant_id=tenant_id, email=value)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError(
+                "An applicant with this email already exists for this tenant."
+            )
+        return value
+
 
 class ApplicantDetailSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
@@ -47,3 +63,19 @@ class ApplicantDetailSerializer(serializers.ModelSerializer):
 
     def get_full_name(self, obj) -> str:
         return f"{obj.first_name} {obj.last_name}"
+
+    def validate_email(self, value):
+        request = self.context.get("request")
+        if not request:
+            return value
+        tenant_id = getattr(request, "tenant_id", None)
+        if not tenant_id:
+            return value
+        qs = Applicant.objects.filter(tenant_id=tenant_id, email=value)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError(
+                "An applicant with this email already exists for this tenant."
+            )
+        return value

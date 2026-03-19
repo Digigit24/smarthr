@@ -1,4 +1,5 @@
 """Views for Application resource."""
+import logging
 import uuid
 from django.db import transaction
 from django.db.models import F
@@ -9,6 +10,8 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
+
+logger = logging.getLogger(__name__)
 
 from activities.models import Activity
 from activities.services import log_activity, log_activity_for_request
@@ -229,13 +232,45 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
         """Manually trigger an AI screening call for this application."""
         from calls.serializers import CallRecordSerializer
         from calls.services import trigger_ai_screening_call
+        from integrations.exceptions import VoiceAIError
 
         application = self.get_object()
-        call_record = trigger_ai_screening_call(
-            application_id=str(application.pk),
-            tenant_id=str(request.tenant_id),
-            owner_user_id=str(request.user_id),
-        )
+
+        # Extract JWT token from request to forward to Voice AI Orchestrator,
+        # since both services share the same JWT secret.
+        auth_token = None
+        auth_header = request.META.get("HTTP_AUTHORIZATION", "")
+        if auth_header.startswith("Bearer "):
+            auth_token = auth_header[7:]
+
+        try:
+            call_record = trigger_ai_screening_call(
+                application_id=str(application.pk),
+                tenant_id=str(request.tenant_id),
+                owner_user_id=str(request.user_id),
+                auth_token=auth_token,
+            )
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)})
+        except VoiceAIError as exc:
+            return Response(
+                {
+                    "error": exc.message,
+                    "code": exc.code,
+                    "details": exc.details,
+                },
+                status=exc.status_code,
+            )
+        except Exception as exc:
+            logger.exception("Unexpected error triggering AI call for application %s", pk)
+            return Response(
+                {
+                    "error": str(exc) or "An unexpected error occurred while triggering the AI call.",
+                    "code": "INTERNAL_ERROR",
+                    "details": {},
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         log_activity_for_request(
             request,
