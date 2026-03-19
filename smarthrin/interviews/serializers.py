@@ -7,6 +7,9 @@ from .models import Interview
 class InterviewListSerializer(serializers.ModelSerializer):
     """Compact serializer for Interview list views."""
 
+    applicant_name = serializers.SerializerMethodField()
+    applicant_email = serializers.SerializerMethodField()
+
     class Meta:
         model = Interview
         fields = [
@@ -19,9 +22,23 @@ class InterviewListSerializer(serializers.ModelSerializer):
             "interviewer_email",
             "status",
             "meeting_link",
+            "applicant_name",
+            "applicant_email",
             "created_at",
         ]
         read_only_fields = ["id", "created_at"]
+
+    def get_applicant_name(self, obj):
+        try:
+            return obj.application.applicant.full_name
+        except AttributeError:
+            return ""
+
+    def get_applicant_email(self, obj):
+        try:
+            return obj.application.applicant.email
+        except AttributeError:
+            return ""
 
 
 class InterviewDetailSerializer(serializers.ModelSerializer):
