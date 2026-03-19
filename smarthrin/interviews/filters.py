@@ -5,6 +5,9 @@ from .models import Interview
 
 
 class InterviewFilterSet(django_filters.FilterSet):
+    application_id = django_filters.UUIDFilter(
+        field_name="application_id", lookup_expr="exact"
+    )
     interview_type = django_filters.CharFilter(field_name="interview_type", lookup_expr="exact")
     status = django_filters.CharFilter(field_name="status", lookup_expr="exact")
     interviewer_user_id = django_filters.UUIDFilter(
@@ -20,6 +23,7 @@ class InterviewFilterSet(django_filters.FilterSet):
     class Meta:
         model = Interview
         fields = [
+            "application_id",
             "interview_type",
             "status",
             "interviewer_user_id",

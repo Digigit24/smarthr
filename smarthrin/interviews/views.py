@@ -101,6 +101,15 @@ class InterviewViewSet(TenantViewSetMixin, ModelViewSet):
         response_serializer = InterviewDetailSerializer(serializer.instance)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        response_serializer = InterviewDetailSerializer(serializer.instance)
+        return Response(response_serializer.data)
+
     def perform_create(self, serializer):
         super().perform_create(serializer)
         interview = serializer.instance
