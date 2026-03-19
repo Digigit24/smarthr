@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from activities.models import Activity
+from integrations.exceptions import VoiceAIError
 from activities.services import log_activity, log_activity_for_request
 from applicants.models import Applicant
 from applicants.serializers import ApplicantDetailSerializer
@@ -231,11 +232,20 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
         from calls.services import trigger_ai_screening_call
 
         application = self.get_object()
-        call_record = trigger_ai_screening_call(
-            application_id=str(application.pk),
-            tenant_id=str(request.tenant_id),
-            owner_user_id=str(request.user_id),
-        )
+
+        try:
+            call_record = trigger_ai_screening_call(
+                application_id=str(application.pk),
+                tenant_id=str(request.tenant_id),
+                owner_user_id=str(request.user_id),
+            )
+        except ValueError as exc:
+            raise ValidationError(detail=str(exc))
+        except VoiceAIError as exc:
+            return Response(
+                {"error": exc.message, "code": exc.code, "details": exc.details},
+                status=exc.status_code,
+            )
 
         log_activity_for_request(
             request,
