@@ -35,6 +35,7 @@ class Job(TenantBaseModel):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
     application_count = models.IntegerField(default=0)
     voice_agent_id = models.CharField(max_length=255, blank=True, null=True)
+    voice_agent_provider = models.CharField(max_length=50, blank=True, default="")
     voice_agent_config = models.JSONField(default=dict, blank=True)
     published_at = models.DateTimeField(null=True, blank=True)
     closes_at = models.DateTimeField(null=True, blank=True)

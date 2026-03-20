@@ -6,6 +6,7 @@ from .models import Job
 class JobVoiceConfigSerializer(serializers.Serializer):
     """Serializer for updating voice agent config on a job."""
     voice_agent_id = serializers.CharField(required=False, allow_blank=True)
+    voice_agent_provider = serializers.CharField(required=False, allow_blank=True)
     voice_agent_config = serializers.JSONField(required=False, default=dict)
 
 
@@ -16,7 +17,8 @@ class JobListSerializer(serializers.ModelSerializer):
         fields = [
             "id", "title", "department", "location", "job_type",
             "experience_level", "status", "application_count",
-            "voice_agent_id", "published_at", "closes_at", "created_at",
+            "voice_agent_id", "voice_agent_provider",
+            "published_at", "closes_at", "created_at",
         ]
         read_only_fields = ["id", "application_count", "created_at"]
 
@@ -28,7 +30,7 @@ class JobCreateSerializer(serializers.ModelSerializer):
         fields = [
             "title", "department", "location", "job_type", "experience_level",
             "salary_min", "salary_max", "description", "requirements",
-            "status", "voice_agent_id", "voice_agent_config",
+            "status", "voice_agent_id", "voice_agent_provider", "voice_agent_config",
             "published_at", "closes_at",
         ]
 
@@ -41,7 +43,8 @@ class JobDetailSerializer(serializers.ModelSerializer):
             "id", "tenant_id", "owner_user_id", "title", "department",
             "location", "job_type", "experience_level", "salary_min",
             "salary_max", "description", "requirements", "status",
-            "application_count", "voice_agent_id", "voice_agent_config",
+            "application_count", "voice_agent_id", "voice_agent_provider",
+            "voice_agent_config",
             "published_at", "closes_at", "created_at", "updated_at",
         ]
         read_only_fields = [

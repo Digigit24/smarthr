@@ -263,6 +263,7 @@ class JobViewSet(TenantViewSetMixin, ModelViewSet):
 
         before = {
             "voice_agent_id": job.voice_agent_id,
+            "voice_agent_provider": job.voice_agent_provider,
             "voice_agent_config": job.voice_agent_config,
         }
 
@@ -270,6 +271,9 @@ class JobViewSet(TenantViewSetMixin, ModelViewSet):
         if "voice_agent_id" in serializer.validated_data:
             job.voice_agent_id = serializer.validated_data["voice_agent_id"]
             update_fields.append("voice_agent_id")
+        if "voice_agent_provider" in serializer.validated_data:
+            job.voice_agent_provider = serializer.validated_data["voice_agent_provider"]
+            update_fields.append("voice_agent_provider")
         if "voice_agent_config" in serializer.validated_data:
             job.voice_agent_config = serializer.validated_data["voice_agent_config"]
             update_fields.append("voice_agent_config")
@@ -283,6 +287,7 @@ class JobViewSet(TenantViewSetMixin, ModelViewSet):
             before=before,
             after={
                 "voice_agent_id": job.voice_agent_id,
+                "voice_agent_provider": job.voice_agent_provider,
                 "voice_agent_config": job.voice_agent_config,
             },
             metadata={"field": "voice_config"},
