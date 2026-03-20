@@ -18,6 +18,7 @@ from .serializers import (
     AvailableAgentSerializer,
     CallRecordDetailSerializer,
     CallRecordListSerializer,
+    CallRecordUpdateStatusSerializer,
     ScorecardListSerializer,
     ScorecardSerializer,
 )
@@ -55,6 +56,8 @@ class CallRecordViewSet(TenantViewSetMixin, ReadOnlyModelViewSet):
 
     def get_permissions(self):
         if self.action == "retry":
+            return [require_permission("smarthrin.calls.create")()]
+        if self.action == "update_status":
             return [require_permission("smarthrin.calls.create")()]
         return [require_permission("smarthrin.calls.view")()]
 
@@ -102,6 +105,23 @@ class CallRecordViewSet(TenantViewSetMixin, ReadOnlyModelViewSet):
         )
         serializer = CallRecordDetailSerializer(new_call, context={"request": request})
         return Response(serializer.data)
+
+    @extend_schema(
+        tags=["Calls"],
+        summary="Update call record status",
+        description="Update the status of a call record.",
+        request=CallRecordUpdateStatusSerializer,
+        responses={200: CallRecordDetailSerializer},
+    )
+    @action(detail=True, methods=["patch"], url_path="update-status", url_name="update-status")
+    def update_status(self, request, pk=None):
+        """Update the status of a call record."""
+        call_record = self.get_object()
+        serializer = CallRecordUpdateStatusSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        call_record.status = serializer.validated_data["status"]
+        call_record.save(update_fields=["status", "updated_at"])
+        return Response(CallRecordDetailSerializer(call_record, context={"request": request}).data)
 
 
 @extend_schema_view(

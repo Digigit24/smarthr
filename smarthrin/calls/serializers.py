@@ -138,6 +138,11 @@ class CallRecordDetailSerializer(serializers.ModelSerializer):
         }
 
 
+class CallRecordUpdateStatusSerializer(serializers.Serializer):
+    """Request body for update-status action."""
+    status = serializers.ChoiceField(choices=CallRecord.Status.choices)
+
+
 class RetryCallSerializer(serializers.Serializer):
     """Request body for retry-call action (no required fields)."""
     pass
