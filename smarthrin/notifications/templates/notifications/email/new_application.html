@@ -1,0 +1,16 @@
+{% extends "notifications/email/base.html" %}
+{% block content %}
+<h2>New Application Received</h2>
+<p><strong>{{ applicant_name }}</strong> has applied for the <strong>{{ job_title }}</strong> position.</p>
+<div class="detail-row">
+  <div class="detail-label">Candidate</div>
+  <div class="detail-value">{{ applicant_name }}</div>
+</div>
+<div class="detail-row">
+  <div class="detail-label">Position</div>
+  <div class="detail-value">{{ job_title }}</div>
+</div>
+{% if dashboard_url %}
+<a class="btn" href="{{ dashboard_url }}">Review Application</a>
+{% endif %}
+{% endblock %}

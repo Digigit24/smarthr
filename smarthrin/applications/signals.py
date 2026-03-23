@@ -13,7 +13,7 @@ def on_application_saved(sender, instance, created, **kwargs):
     """Handle Application create and status changes."""
     from jobs.models import Job
     from notifications.models import Notification
-    from notifications.services import create_notification
+    from notifications.services import create_notification, notify_with_email
 
     if created:
         # Increment job application_count
@@ -22,24 +22,45 @@ def on_application_saved(sender, instance, created, **kwargs):
             tenant_id=instance.tenant_id,
         ).update(application_count=F("application_count") + 1)
 
-        # Notify job owner
+        # Notify job owner — in-app + email
         try:
             job = instance.job
             applicant = instance.applicant
-            create_notification(
-                tenant_id=str(instance.tenant_id),
-                owner_user_id=str(instance.owner_user_id),
-                recipient_user_id=str(instance.owner_user_id),
-                notification_type=Notification.NotificationType.IN_APP,
-                category=Notification.Category.APPLICATION,
-                title="New Application Received",
-                message=f"{applicant.first_name} {applicant.last_name} applied for {job.title}",
-                data={
-                    "application_id": str(instance.id),
-                    "job_id": str(instance.job_id),
-                    "applicant_id": str(instance.applicant_id),
-                },
-            )
+            owner_email = _resolve_owner_email(instance)
+
+            if owner_email:
+                notify_with_email(
+                    tenant_id=str(instance.tenant_id),
+                    owner_user_id=str(instance.owner_user_id),
+                    recipient_user_id=str(instance.owner_user_id),
+                    recipient_email=owner_email,
+                    category=Notification.Category.APPLICATION,
+                    title="New Application Received",
+                    message=f"{applicant.first_name} {applicant.last_name} applied for {job.title}",
+                    email_type="new_application",
+                    extra_data={
+                        "application_id": str(instance.id),
+                        "job_id": str(instance.job_id),
+                        "applicant_id": str(instance.applicant_id),
+                        "applicant_name": f"{applicant.first_name} {applicant.last_name}",
+                        "job_title": job.title,
+                    },
+                )
+            else:
+                create_notification(
+                    tenant_id=str(instance.tenant_id),
+                    owner_user_id=str(instance.owner_user_id),
+                    recipient_user_id=str(instance.owner_user_id),
+                    notification_type=Notification.NotificationType.IN_APP,
+                    category=Notification.Category.APPLICATION,
+                    title="New Application Received",
+                    message=f"{applicant.first_name} {applicant.last_name} applied for {job.title}",
+                    data={
+                        "application_id": str(instance.id),
+                        "job_id": str(instance.job_id),
+                        "applicant_id": str(instance.applicant_id),
+                    },
+                )
         except Exception as exc:
             logger.warning(f"Failed to create new-application notification: {exc}")
         return
@@ -64,6 +85,33 @@ def on_application_saved(sender, instance, created, **kwargs):
         except Exception as exc:
             logger.error(f"Failed to queue AI call dispatch for application {instance.id}: {exc}")
 
+    elif status == "AI_COMPLETED":
+        score_str = f" — Score: {instance.score}" if instance.score else ""
+        applicant = instance.applicant
+        job = instance.job
+        owner_email = _resolve_owner_email(instance)
+
+        if owner_email:
+            notify_with_email(
+                tenant_id=str(instance.tenant_id),
+                owner_user_id=str(instance.owner_user_id),
+                recipient_user_id=str(instance.owner_user_id),
+                recipient_email=owner_email,
+                category=Notification.Category.APPLICATION,
+                title="AI Screening Complete",
+                message=f"AI screening complete for {applicant.first_name} {applicant.last_name}{score_str}",
+                email_type="ai_screening_complete",
+                extra_data={
+                    "application_id": str(instance.id),
+                    "applicant_name": f"{applicant.first_name} {applicant.last_name}",
+                    "job_title": job.title,
+                    "score": str(instance.score) if instance.score else None,
+                },
+            )
+        else:
+            _notify(instance, "AI Screening Complete",
+                    f"AI screening complete for {applicant.first_name} {applicant.last_name}{score_str}")
+
     elif status == "SHORTLISTED":
         _notify(instance, "Candidate Shortlisted",
                 f"{instance.applicant.first_name} {instance.applicant.last_name} has been shortlisted")
@@ -75,11 +123,6 @@ def on_application_saved(sender, instance, created, **kwargs):
     elif status == "HIRED":
         _notify(instance, "Candidate Hired!",
                 f"{instance.applicant.first_name} {instance.applicant.last_name} has been hired!")
-
-    elif status == "AI_COMPLETED":
-        score_str = f" — Score: {instance.score}" if instance.score else ""
-        _notify(instance, "AI Screening Complete",
-                f"AI screening complete for {instance.applicant.first_name} {instance.applicant.last_name}{score_str}")
 
 
 @receiver(post_delete, sender="applications.Application")
@@ -111,3 +154,25 @@ def _notify(instance, title: str, message: str) -> None:
         )
     except Exception as exc:
         logger.warning(f"Failed to create notification '{title}': {exc}")
+
+
+def _resolve_owner_email(instance) -> str:
+    """
+    Resolve the owner's email from cached request or metadata.
+    Returns empty string if unavailable (email delivery will be skipped).
+    """
+    # Check if the instance has owner email in metadata
+    metadata = getattr(instance, "metadata", None) or {}
+    if isinstance(metadata, dict) and metadata.get("owner_email"):
+        return metadata["owner_email"]
+
+    # Try to fetch from SuperAdmin user cache
+    try:
+        from django.core.cache import cache
+        cached_email = cache.get(f"user_email:{instance.owner_user_id}")
+        if cached_email:
+            return cached_email
+    except Exception:
+        pass
+
+    return ""

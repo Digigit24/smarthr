@@ -16,6 +16,9 @@ def on_interview_saved(sender, instance, created, **kwargs):
     if created:
         try:
             applicant = instance.application.applicant
+            job = instance.application.job
+
+            # In-app notification for the owner/recruiter
             create_notification(
                 tenant_id=str(instance.tenant_id),
                 owner_user_id=str(instance.owner_user_id),
@@ -33,16 +36,45 @@ def on_interview_saved(sender, instance, created, **kwargs):
         except Exception as exc:
             logger.warning(f"Failed to create interview-scheduled notification: {exc}")
 
-        # Queue email notification stub (apply_async with a short broker timeout
-        # so the request doesn't hang if Redis/Celery is unavailable)
+        # Send email to interviewer (if email available)
         try:
-            from calls.tasks import send_interview_notification_email
-            send_interview_notification_email.apply_async(
-                args=[str(instance.id)],
-                retry=False,
-                broker_connection_timeout=3,
-                broker_connection_retry=False,
-            )
+            from notifications.tasks import send_notification
+            applicant = instance.application.applicant
+            job = instance.application.job
+
+            email_recipient = instance.interviewer_email
+            if email_recipient:
+                email_data = {
+                    "email_type": "interview_scheduled",
+                    "recipient_email": email_recipient,
+                    "applicant_name": f"{applicant.first_name} {applicant.last_name}",
+                    "job_title": job.title,
+                    "interview_type": instance.interview_type,
+                    "scheduled_at": instance.scheduled_at.strftime("%Y-%m-%d %H:%M UTC"),
+                    "interviewer_name": instance.interviewer_name,
+                    "meeting_link": instance.meeting_link,
+                    "interview_id": str(instance.id),
+                    "application_id": str(instance.application_id),
+                }
+                send_notification.apply_async(
+                    kwargs={
+                        "tenant_id": str(instance.tenant_id),
+                        "recipient_user_id": str(instance.interviewer_user_id or instance.owner_user_id),
+                        "notification_type": "EMAIL",
+                        "title": f"Interview Scheduled: {applicant.first_name} {applicant.last_name} — {instance.interview_type}",
+                        "message": (
+                            f"{instance.interview_type} interview with "
+                            f"{applicant.first_name} {applicant.last_name} for {job.title} "
+                            f"on {instance.scheduled_at.strftime('%Y-%m-%d %H:%M UTC')}"
+                        ),
+                        "data": email_data,
+                        "category": "INTERVIEW",
+                        "owner_user_id": str(instance.owner_user_id),
+                    },
+                    retry=False,
+                    broker_connection_timeout=3,
+                    broker_connection_retry=False,
+                )
         except Exception as exc:
             logger.warning(f"Failed to queue interview email task: {exc}")
         return

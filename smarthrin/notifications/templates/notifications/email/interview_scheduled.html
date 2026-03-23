@@ -1,0 +1,32 @@
+{% extends "notifications/email/base.html" %}
+{% block content %}
+<h2>Interview Scheduled</h2>
+<p>An interview has been scheduled for <strong>{{ applicant_name }}</strong>.</p>
+<div class="detail-row">
+  <div class="detail-label">Candidate</div>
+  <div class="detail-value">{{ applicant_name }}</div>
+</div>
+<div class="detail-row">
+  <div class="detail-label">Position</div>
+  <div class="detail-value">{{ job_title }}</div>
+</div>
+<div class="detail-row">
+  <div class="detail-label">Interview Type</div>
+  <div class="detail-value">{{ interview_type }}</div>
+</div>
+<div class="detail-row">
+  <div class="detail-label">Scheduled At</div>
+  <div class="detail-value">{{ scheduled_at }}</div>
+</div>
+{% if interviewer_name %}
+<div class="detail-row">
+  <div class="detail-label">Interviewer</div>
+  <div class="detail-value">{{ interviewer_name }}</div>
+</div>
+{% endif %}
+{% if meeting_link %}
+<a class="btn" href="{{ meeting_link }}">Join Meeting</a>
+{% elif dashboard_url %}
+<a class="btn" href="{{ dashboard_url }}">View Details</a>
+{% endif %}
+{% endblock %}

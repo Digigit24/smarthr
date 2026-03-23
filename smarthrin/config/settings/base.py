@@ -207,6 +207,16 @@ CORS_ALLOW_HEADERS = [
     "tenanttoken",
 ]
 
+# SendGrid Email
+SENDGRID_API_KEY = env("SENDGRID_API_KEY", default="")
+SENDGRID_FROM_EMAIL = env("SENDGRID_FROM_EMAIL", default="notifications@smarthr.in")
+SENDGRID_FROM_NAME = env("SENDGRID_FROM_NAME", default="SmartHR-In")
+# Optional SendGrid dynamic template IDs (leave blank to use Django templates)
+SENDGRID_TEMPLATE_NEW_APPLICATION = env("SENDGRID_TEMPLATE_NEW_APPLICATION", default="")
+SENDGRID_TEMPLATE_AI_SCREENING_COMPLETE = env("SENDGRID_TEMPLATE_AI_SCREENING_COMPLETE", default="")
+SENDGRID_TEMPLATE_INTERVIEW_SCHEDULED = env("SENDGRID_TEMPLATE_INTERVIEW_SCHEDULED", default="")
+SENDGRID_TEMPLATE_INTERVIEW_REMINDER = env("SENDGRID_TEMPLATE_INTERVIEW_REMINDER", default="")
+
 # Celery
 CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://localhost:6379/1")
 CELERY_RESULT_BACKEND = env("REDIS_URL", default="redis://localhost:6379/0")
@@ -227,5 +237,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "call_queue.tasks.cleanup_stuck_queue_items",
         "schedule": 300.0,  # Every 5 minutes
         "options": {"expires": 290},
+    },
+    "send-interview-reminders": {
+        "task": "notifications.tasks.send_interview_reminders",
+        "schedule": 900.0,  # Every 15 minutes
+        "options": {"expires": 890},
     },
 }
