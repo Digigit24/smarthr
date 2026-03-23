@@ -1,6 +1,5 @@
 """Applicant model."""
 from django.contrib.postgres.indexes import GinIndex
-from django.contrib.postgres.operations import TrigramExtension
 from django.db import models
 
 from common.models import TenantBaseModel

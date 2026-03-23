@@ -48,4 +48,8 @@ def invalidate_agent_cache(tenant_id: str) -> None:
     except ValueError:
         # Key doesn't exist yet
         cache.set(version_key, 1, timeout=None)
+    except Exception as exc:
+        # Redis may be down — log but don't crash the caller
+        logger.warning(f"Failed to invalidate voice agent cache for tenant {tenant_id}: {exc}")
+        return
     logger.info(f"Voice agent cache invalidated for tenant {tenant_id}")
