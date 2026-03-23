@@ -2,7 +2,6 @@
 import logging
 import uuid
 from django.db import transaction
-from django.db.models import F
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, inline_serializer
 from drf_spectacular.types import OpenApiTypes
 from rest_framework import serializers as drf_serializers, status
@@ -115,7 +114,6 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
         """
         Validate job and applicant belong to same tenant.
         Support inline applicant creation when 'applicant' dict is provided.
-        Increment job.application_count using F() to avoid race conditions.
         """
         request = self.request
         tenant_id = request.tenant_id
@@ -149,11 +147,8 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
             owner_user_id=request.user_id,
             applicant=applicant_instance,
         )
-
-        # Increment application_count atomically
-        if job is not None:
-            from jobs.models import Job
-            Job.objects.filter(pk=job.pk).update(application_count=F("application_count") + 1)
+        # NOTE: job.application_count is incremented by the Application
+        # post_save signal in applications/signals.py — do NOT duplicate here.
 
     def perform_update(self, serializer):
         instance = serializer.save(tenant_id=self.request.tenant_id)

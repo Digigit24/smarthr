@@ -42,6 +42,7 @@ class CallRecord(TenantBaseModel):
             models.Index(fields=["tenant_id", "application_id"]),
             models.Index(fields=["tenant_id", "status"]),
             models.Index(fields=["provider_call_id"]),
+            models.Index(fields=["tenant_id", "provider_call_id"]),
         ]
 
     def __init__(self, *args, **kwargs):
