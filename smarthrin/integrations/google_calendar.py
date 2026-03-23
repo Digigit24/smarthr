@@ -83,6 +83,12 @@ def _get_calendar_service():
         raise CalendarAPIError(f"Failed to initialize Google Calendar service: {exc}") from exc
 
 
+def _has_delegation() -> bool:
+    """Check if domain-wide delegation is configured."""
+    delegate_email = getattr(settings, "GOOGLE_CALENDAR_DELEGATE_EMAIL", "")
+    return bool(delegate_email)
+
+
 def is_configured() -> bool:
     """Check whether Google Calendar credentials are present in settings."""
     credentials_json = getattr(settings, "GOOGLE_CALENDAR_CREDENTIALS_JSON", "")
@@ -101,6 +107,10 @@ def create_event(
     """
     Create a Google Calendar event with an auto-generated Google Meet link.
 
+    Without Google Workspace delegation, attendees are listed in the
+    description instead (service accounts can't send invitations directly).
+    The Meet link is still generated and returned.
+
     Returns:
         {"event_id": str, "meeting_link": str, "html_link": str}
 
@@ -109,12 +119,20 @@ def create_event(
         CalendarAPIError — API call failed
     """
     service = _get_calendar_service()
+    has_delegation = _has_delegation()
 
     end_time = start_time + timedelta(minutes=duration_minutes)
 
+    # Build attendee info for the description (always useful)
+    all_emails = list({email for email in ([interviewer_email] + attendees) if email})
+    attendee_text = "\n".join(f"  - {email}" for email in all_emails)
+    full_description = description
+    if not has_delegation and attendee_text:
+        full_description += f"\n\nParticipants:\n{attendee_text}"
+
     event_body = {
         "summary": title,
-        "description": description,
+        "description": full_description,
         "start": {
             "dateTime": start_time.isoformat(),
             "timeZone": "UTC",
@@ -123,7 +141,6 @@ def create_event(
             "dateTime": end_time.isoformat(),
             "timeZone": "UTC",
         },
-        "attendees": [{"email": email} for email in attendees if email],
         "conferenceData": {
             "createRequest": {
                 "requestId": f"smarthr-{uuid.uuid4().hex[:12]}",
@@ -139,11 +156,9 @@ def create_event(
         },
     }
 
-    # Add interviewer as attendee
-    if interviewer_email:
-        existing_emails = {a["email"] for a in event_body["attendees"]}
-        if interviewer_email not in existing_emails:
-            event_body["attendees"].append({"email": interviewer_email})
+    # Only add attendees if we have domain-wide delegation (Workspace)
+    if has_delegation:
+        event_body["attendees"] = [{"email": email} for email in all_emails]
 
     try:
         event = (
@@ -152,7 +167,7 @@ def create_event(
                 calendarId="primary",
                 body=event_body,
                 conferenceDataVersion=1,
-                sendUpdates="all",
+                sendUpdates="all" if has_delegation else "none",
             )
             .execute()
         )
@@ -209,7 +224,8 @@ def update_event(
         start_dt = datetime.fromisoformat(event["start"]["dateTime"])
         end_time = start_dt + timedelta(minutes=duration_minutes)
         event["end"] = {"dateTime": end_time.isoformat(), "timeZone": "UTC"}
-    if attendees is not None:
+    has_delegation = _has_delegation()
+    if attendees is not None and has_delegation:
         event["attendees"] = [{"email": email} for email in attendees if email]
 
     try:
@@ -219,7 +235,7 @@ def update_event(
                 calendarId="primary",
                 eventId=event_id,
                 body=event,
-                sendUpdates="all",
+                sendUpdates="all" if has_delegation else "none",
             )
             .execute()
         )
@@ -242,10 +258,11 @@ def cancel_event(event_id: str) -> None:
     service = _get_calendar_service()
 
     try:
+        has_delegation = _has_delegation()
         service.events().delete(
             calendarId="primary",
             eventId=event_id,
-            sendUpdates="all",
+            sendUpdates="all" if has_delegation else "none",
         ).execute()
     except Exception as exc:
         raise CalendarAPIError(f"Failed to cancel event {event_id}: {exc}") from exc
