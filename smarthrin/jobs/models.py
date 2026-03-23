@@ -1,4 +1,5 @@
 """Job model."""
+from django.contrib.postgres.indexes import GinIndex
 from django.db import models
 
 from common.models import TenantBaseModel
@@ -46,6 +47,7 @@ class Job(TenantBaseModel):
         indexes = [
             models.Index(fields=["tenant_id", "status"]),
             models.Index(fields=["tenant_id", "department"]),
+            GinIndex(fields=["title"], name="job_title_trgm", opclasses=["gin_trgm_ops"]),
         ]
 
     def __init__(self, *args, **kwargs):

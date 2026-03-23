@@ -11,6 +11,7 @@ from common.permissions import require_permission
 from integrations.exceptions import VoiceAIError
 from integrations.voice_ai import VoiceAIClient
 
+from .agent_cache import get_cached_agents, set_cached_agents
 from .serializers import AvailableAgentSerializer
 
 logger = logging.getLogger(__name__)
@@ -54,20 +55,36 @@ class VoiceAgentListView(APIView):
     )
     def get(self, request):
         auth_token = _extract_auth_token(request)
-        client = VoiceAIClient()
+        tenant_id = str(request.tenant_id)
 
+        # Build cache-key params from query string
+        page = int(request.query_params.get("page", 1))
+        limit = int(request.query_params.get("limit", 20))
+        provider = request.query_params.get("provider")
+        is_active = (
+            request.query_params.get("is_active", "").lower() == "true"
+            if "is_active" in request.query_params
+            else None
+        )
+        search = request.query_params.get("search")
+
+        cache_params = dict(page=page, limit=limit, provider=provider, is_active=is_active, search=search)
+
+        # Try cache first
+        cached = get_cached_agents(tenant_id, **cache_params)
+        if cached is not None:
+            serializer = AvailableAgentSerializer(cached, many=True)
+            return Response(serializer.data)
+
+        client = VoiceAIClient()
         try:
             data = client.list_agents(
-                tenant_id=str(request.tenant_id),
-                page=int(request.query_params.get("page", 1)),
-                limit=int(request.query_params.get("limit", 20)),
-                provider=request.query_params.get("provider"),
-                is_active=(
-                    request.query_params.get("is_active", "").lower() == "true"
-                    if "is_active" in request.query_params
-                    else None
-                ),
-                search=request.query_params.get("search"),
+                tenant_id=tenant_id,
+                page=page,
+                limit=limit,
+                provider=provider,
+                is_active=is_active,
+                search=search,
                 auth_token=auth_token or None,
             )
         except VoiceAIError as exc:
@@ -85,6 +102,9 @@ class VoiceAgentListView(APIView):
             agents = data
         else:
             agents = []
+
+        # Cache the normalized agent list
+        set_cached_agents(tenant_id, agents, **cache_params)
 
         serializer = AvailableAgentSerializer(agents, many=True)
         return Response(serializer.data)
