@@ -9,6 +9,7 @@ class InterviewListSerializer(serializers.ModelSerializer):
 
     applicant_name = serializers.SerializerMethodField()
     applicant_email = serializers.SerializerMethodField()
+    calendar_synced = serializers.SerializerMethodField()
 
     class Meta:
         model = Interview
@@ -22,11 +23,16 @@ class InterviewListSerializer(serializers.ModelSerializer):
             "interviewer_email",
             "status",
             "meeting_link",
+            "calendar_event_id",
+            "calendar_synced",
             "applicant_name",
             "applicant_email",
             "created_at",
         ]
         read_only_fields = ["id", "created_at"]
+
+    def get_calendar_synced(self, obj) -> bool:
+        return bool(obj.calendar_event_id)
 
     def get_applicant_name(self, obj):
         try:
