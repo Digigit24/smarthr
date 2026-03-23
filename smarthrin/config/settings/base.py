@@ -223,4 +223,9 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 60.0,  # Every 60 seconds
         "options": {"expires": 55},  # Expire before next run to prevent pile-up
     },
+    "cleanup-stuck-queue-items": {
+        "task": "call_queue.tasks.cleanup_stuck_queue_items",
+        "schedule": 300.0,  # Every 5 minutes
+        "options": {"expires": 290},
+    },
 }

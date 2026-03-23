@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import logging
+import time
 
 from django.conf import settings
 from django.http import JsonResponse
@@ -17,15 +18,59 @@ logger = logging.getLogger(__name__)
 
 WEBHOOK_SECRET = getattr(settings, "WEBHOOK_SECRET", getattr(settings, "VOICE_AI_API_KEY", ""))
 
+# Maximum age of a webhook payload before it's considered a replay (seconds)
+WEBHOOK_TIMESTAMP_TOLERANCE = 300  # 5 minutes
 
-def _verify_signature(request) -> bool:
-    """Verify X-Webhook-Signature header using HMAC-SHA256. Non-blocking if absent."""
+
+def _verify_signature(request) -> tuple[bool, str]:
+    """
+    Verify X-Webhook-Signature header using HMAC-SHA256.
+
+    In production (DEBUG=False), signature and timestamp are mandatory.
+    In development (DEBUG=True), requests without signature/secret are allowed.
+
+    Returns (is_valid, error_message).
+    """
     sig = request.headers.get("X-Webhook-Signature", "")
+    timestamp_header = request.headers.get("X-Webhook-Timestamp", "")
+    is_debug = getattr(settings, "DEBUG", False)
+
+    # In production, require both secret and signature
+    if not is_debug:
+        if not WEBHOOK_SECRET:
+            logger.error("WEBHOOK_SECRET not configured in production")
+            return False, "Webhook secret not configured"
+        if not sig:
+            return False, "Missing X-Webhook-Signature header"
+
+    # In development, skip verification if no secret/signature configured
     if not sig or not WEBHOOK_SECRET:
-        return True  # Allow in development / if no signature configured
+        return True, ""
+
+    # Verify timestamp to prevent replay attacks
+    if timestamp_header:
+        try:
+            ts = int(timestamp_header)
+            age = abs(time.time() - ts)
+            if age > WEBHOOK_TIMESTAMP_TOLERANCE:
+                return False, f"Webhook timestamp too old ({int(age)}s)"
+        except (ValueError, TypeError):
+            return False, "Invalid X-Webhook-Timestamp header"
+    elif not is_debug:
+        return False, "Missing X-Webhook-Timestamp header"
+
+    # Verify HMAC signature
+    # Include timestamp in signed payload to bind signature to timestamp
     body = request.body
-    expected = hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(sig, expected)
+    if timestamp_header:
+        signed_payload = f"{timestamp_header}.".encode() + body
+    else:
+        signed_payload = body
+    expected = hmac.new(WEBHOOK_SECRET.encode(), signed_payload, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        return False, "Invalid signature"
+
+    return True, ""
 
 
 @method_decorator(csrf_exempt, name="dispatch")
@@ -39,8 +84,10 @@ class CallCompletedWebhookView(View):
     """
 
     def post(self, request):
-        if not _verify_signature(request):
-            return JsonResponse({"error": "Invalid signature"}, status=401)
+        is_valid, error = _verify_signature(request)
+        if not is_valid:
+            logger.warning(f"Webhook signature verification failed: {error}")
+            return JsonResponse({"error": error}, status=401)
         try:
             payload = json.loads(request.body)
         except json.JSONDecodeError:
@@ -63,8 +110,10 @@ class CallStatusWebhookView(View):
     """
 
     def post(self, request):
-        if not _verify_signature(request):
-            return JsonResponse({"error": "Invalid signature"}, status=401)
+        is_valid, error = _verify_signature(request)
+        if not is_valid:
+            logger.warning(f"Webhook signature verification failed: {error}")
+            return JsonResponse({"error": error}, status=401)
         try:
             payload = json.loads(request.body)
         except json.JSONDecodeError:
