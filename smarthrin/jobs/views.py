@@ -11,7 +11,8 @@ from drf_spectacular.utils import (
 )
 from drf_spectacular.types import OpenApiTypes
 from rest_framework import serializers, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, authentication_classes, permission_classes
+from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
@@ -25,6 +26,98 @@ from common.permissions import require_permission
 from .filters import JobFilterSet
 from .models import Job
 from .serializers import JobCreateSerializer, JobDetailSerializer, JobListSerializer, JobVoiceConfigSerializer
+
+
+# ------------------------------------------------------------------
+# Standalone export view
+# ------------------------------------------------------------------
+
+@extend_schema(
+    tags=["Jobs"],
+    summary="Export jobs",
+    description=(
+        "Export filtered jobs as CSV or Excel. "
+        "Supports the same query params as the list endpoint. "
+        "Use `export_format=xlsx` for Excel or `export_format=csv` (default) for CSV."
+    ),
+    parameters=[
+        OpenApiParameter("export_format", OpenApiTypes.STR, enum=["csv", "xlsx"], description="Export format (default: csv)"),
+        OpenApiParameter("status", OpenApiTypes.STR, description="Filter by status"),
+        OpenApiParameter("job_type", OpenApiTypes.STR, description="Filter by job type"),
+        OpenApiParameter("experience_level", OpenApiTypes.STR, description="Filter by experience level"),
+        OpenApiParameter("department", OpenApiTypes.STR, description="Filter by department"),
+        OpenApiParameter("location", OpenApiTypes.STR, description="Filter by location"),
+    ],
+    responses={200: None},
+)
+@api_view(["GET"])
+@authentication_classes([JWTRequestAuthentication])
+@permission_classes([require_permission("smarthrin.jobs.view")])
+def export_jobs(request: Request):
+    """Export filtered jobs to CSV or Excel."""
+    import datetime
+    from common.export import build_csv_response, build_excel_response
+
+    qs = Job.objects.filter(tenant_id=request.tenant_id)
+
+    scope = getattr(request, "permission_scope", None)
+    if scope == "own":
+        qs = qs.filter(owner_user_id=request.user_id)
+
+    filterset = JobFilterSet(request.query_params, queryset=qs, request=request)
+    if not filterset.is_valid():
+        from rest_framework.exceptions import ValidationError
+        raise ValidationError(filterset.errors)
+    qs = filterset.qs
+
+    export_format = request.query_params.get("export_format", "csv").lower()
+
+    columns = [
+        ("title", "Title"),
+        ("department", "Department"),
+        ("location", "Location"),
+        ("job_type", "Job Type"),
+        ("experience_level", "Experience Level"),
+        ("status", "Status"),
+        ("salary_min", "Salary Min"),
+        ("salary_max", "Salary Max"),
+        ("application_count", "Applications"),
+        ("published_at", "Published At"),
+        ("closes_at", "Closes At"),
+        ("created_at", "Created At"),
+    ]
+
+    rows = []
+    for job in qs.iterator():
+        rows.append({
+            "title": job.title,
+            "department": job.department or "",
+            "location": job.location or "",
+            "job_type": job.job_type,
+            "experience_level": job.experience_level,
+            "status": job.status,
+            "salary_min": str(job.salary_min) if job.salary_min is not None else "",
+            "salary_max": str(job.salary_max) if job.salary_max is not None else "",
+            "application_count": str(job.application_count),
+            "published_at": job.published_at,
+            "closes_at": job.closes_at,
+            "created_at": job.created_at,
+        })
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if export_format == "xlsx":
+        return build_excel_response(
+            rows=rows,
+            columns=columns,
+            filename=f"jobs_{timestamp}.xlsx",
+            sheet_name="Jobs",
+        )
+    return build_csv_response(
+        rows=rows,
+        columns=columns,
+        filename=f"jobs_{timestamp}.csv",
+    )
 
 
 @extend_schema_view(

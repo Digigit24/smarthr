@@ -2,7 +2,8 @@
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, inline_serializer
 from drf_spectacular.types import OpenApiTypes
 from rest_framework import serializers as drf_serializers, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, authentication_classes, permission_classes
+from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.viewsets import ReadOnlyModelViewSet
@@ -23,6 +24,104 @@ from .serializers import (
     ScorecardListSerializer,
     ScorecardSerializer,
 )
+
+
+# ------------------------------------------------------------------
+# Standalone export view for scorecards
+# ------------------------------------------------------------------
+
+@extend_schema(
+    tags=["Scorecards"],
+    summary="Export scorecards",
+    description=(
+        "Export filtered scorecards as CSV or Excel. "
+        "Supports the same query params as the list endpoint. "
+        "Use `export_format=xlsx` for Excel or `export_format=csv` (default) for CSV."
+    ),
+    parameters=[
+        OpenApiParameter("export_format", OpenApiTypes.STR, enum=["csv", "xlsx"], description="Export format (default: csv)"),
+        OpenApiParameter("application", OpenApiTypes.UUID, description="Filter by application ID"),
+        OpenApiParameter("recommendation", OpenApiTypes.STR, description="Filter by recommendation"),
+        OpenApiParameter("overall_score_gte", OpenApiTypes.NUMBER, description="Minimum overall score"),
+        OpenApiParameter("overall_score_lte", OpenApiTypes.NUMBER, description="Maximum overall score"),
+    ],
+    responses={200: None},
+)
+@api_view(["GET"])
+@authentication_classes([JWTRequestAuthentication])
+@permission_classes([require_permission("smarthrin.calls.view")])
+def export_scorecards(request: Request):
+    """Export filtered scorecards to CSV or Excel."""
+    import datetime
+    import json
+    from common.export import build_csv_response, build_excel_response
+
+    qs = Scorecard.objects.select_related(
+        "application", "application__applicant", "application__job"
+    ).filter(tenant_id=request.tenant_id)
+
+    scope = getattr(request, "permission_scope", None)
+    if scope == "own":
+        qs = qs.filter(owner_user_id=request.user_id)
+
+    filterset = ScorecardFilterSet(request.query_params, queryset=qs, request=request)
+    if not filterset.is_valid():
+        from rest_framework.exceptions import ValidationError
+        raise ValidationError(filterset.errors)
+    qs = filterset.qs
+
+    export_format = request.query_params.get("export_format", "csv").lower()
+
+    columns = [
+        ("applicant_name", "Applicant Name"),
+        ("applicant_email", "Applicant Email"),
+        ("job_title", "Job Title"),
+        ("overall_score", "Overall Score"),
+        ("communication_score", "Communication"),
+        ("knowledge_score", "Knowledge"),
+        ("confidence_score", "Confidence"),
+        ("relevance_score", "Relevance"),
+        ("recommendation", "Recommendation"),
+        ("summary", "Summary"),
+        ("strengths", "Strengths"),
+        ("weaknesses", "Weaknesses"),
+        ("created_at", "Created At"),
+    ]
+
+    rows = []
+    for sc in qs.iterator():
+        applicant = sc.application.applicant if sc.application else None
+        job = sc.application.job if sc.application else None
+        rows.append({
+            "applicant_name": f"{applicant.first_name} {applicant.last_name}" if applicant else "",
+            "applicant_email": applicant.email if applicant else "",
+            "job_title": job.title if job else "",
+            "overall_score": str(sc.overall_score),
+            "communication_score": str(sc.communication_score),
+            "knowledge_score": str(sc.knowledge_score),
+            "confidence_score": str(sc.confidence_score),
+            "relevance_score": str(sc.relevance_score),
+            "recommendation": sc.recommendation,
+            "summary": sc.summary or "",
+            "strengths": ", ".join(sc.strengths) if sc.strengths else "",
+            "weaknesses": ", ".join(sc.weaknesses) if sc.weaknesses else "",
+            "created_at": sc.created_at,
+        })
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if export_format == "xlsx":
+        return build_excel_response(
+            rows=rows,
+            columns=columns,
+            filename=f"scorecards_{timestamp}.xlsx",
+            sheet_name="Scorecards",
+        )
+    return build_csv_response(
+        rows=rows,
+        columns=columns,
+        filename=f"scorecards_{timestamp}.csv",
+    )
 
 
 @extend_schema_view(
