@@ -174,62 +174,82 @@ def dispatch_queue_item(self, item_id: str, tenant_id: str) -> Optional[str]:
     Handles retry logic based on queue config max_retries.
     """
     import re
+    from django.db import transaction
     from django.utils import timezone
     from integrations.exceptions import VoiceAIProviderError, VoiceAICredentialsMissing, VoiceAIError
     from integrations.voice_ai import VoiceAIClient
     from calls.models import CallRecord
     from .models import CallQueueItem
 
-    try:
-        item = CallQueueItem.objects.select_related(
-            "queue", "application__job", "application__applicant"
-        ).get(id=item_id, tenant_id=tenant_id)
-    except CallQueueItem.DoesNotExist:
-        logger.error(f"CallQueueItem {item_id} not found")
-        return None
+    # Use select_for_update to prevent concurrent dispatch of the same item
+    with transaction.atomic():
+        try:
+            item = (
+                CallQueueItem.objects
+                .select_for_update(skip_locked=True)
+                .select_related("queue", "application__job", "application__applicant")
+                .get(id=item_id, tenant_id=tenant_id)
+            )
+        except CallQueueItem.DoesNotExist:
+            logger.error(f"CallQueueItem {item_id} not found (or locked by another task)")
+            return None
 
-    if item.status not in [CallQueueItem.Status.PENDING]:
-        logger.info(f"QueueItem {item_id} is {item.status}, skipping dispatch")
-        return None
+        if item.status not in [CallQueueItem.Status.PENDING]:
+            logger.info(f"QueueItem {item_id} is {item.status}, skipping dispatch")
+            return None
 
-    queue = item.queue
-    config = queue.get_config()
-    application = item.application
-    job = application.job
-    applicant = application.applicant
+        # Check for existing active call records for this queue item
+        active_statuses = [
+            CallRecord.Status.QUEUED,
+            CallRecord.Status.INITIATED,
+            CallRecord.Status.RINGING,
+            CallRecord.Status.IN_PROGRESS,
+        ]
+        if CallRecord.objects.filter(
+            queue_items__id=item_id,
+            status__in=active_statuses,
+        ).exists():
+            logger.info(f"QueueItem {item_id} already has an active call record, skipping dispatch")
+            return None
 
-    # Validate phone
-    if not applicant.phone:
-        item.status = CallQueueItem.Status.FAILED
-        item.error_message = f"Applicant {applicant.first_name} {applicant.last_name} has no phone number"
-        item.save(update_fields=["status", "error_message", "updated_at"])
-        _update_queue_failed_count(queue)
-        return None
+        queue = item.queue
+        config = queue.get_config()
+        application = item.application
+        job = application.job
+        applicant = application.applicant
 
-    # Normalize phone
-    E164_PATTERN = re.compile(r"^\+[1-9]\d{1,14}$")
-    phone = re.sub(r"[\s\-\(\)]", "", applicant.phone)
-    if not E164_PATTERN.match(phone):
-        item.status = CallQueueItem.Status.FAILED
-        item.error_message = f"Phone '{applicant.phone}' is not in E.164 format"
-        item.save(update_fields=["status", "error_message", "updated_at"])
-        _update_queue_failed_count(queue)
-        return None
+        # Validate phone
+        if not applicant.phone:
+            item.status = CallQueueItem.Status.FAILED
+            item.error_message = f"Applicant {applicant.first_name} {applicant.last_name} has no phone number"
+            item.save(update_fields=["status", "error_message", "updated_at"])
+            _update_queue_failed_count(queue)
+            return None
 
-    # Use queue's voice_agent_id (overrides job's)
-    agent_id = queue.voice_agent_id or job.voice_agent_id
-    if not agent_id:
-        item.status = CallQueueItem.Status.FAILED
-        item.error_message = "No voice_agent_id configured on queue or job"
-        item.save(update_fields=["status", "error_message", "updated_at"])
-        _update_queue_failed_count(queue)
-        return None
+        # Normalize phone
+        E164_PATTERN = re.compile(r"^\+[1-9]\d{1,14}$")
+        phone = re.sub(r"[\s\-\(\)]", "", applicant.phone)
+        if not E164_PATTERN.match(phone):
+            item.status = CallQueueItem.Status.FAILED
+            item.error_message = f"Phone '{applicant.phone}' is not in E.164 format"
+            item.save(update_fields=["status", "error_message", "updated_at"])
+            _update_queue_failed_count(queue)
+            return None
 
-    # Mark item as CALLING
-    item.status = CallQueueItem.Status.CALLING
-    item.attempts += 1
-    item.last_attempt_at = timezone.now()
-    item.save(update_fields=["status", "attempts", "last_attempt_at", "updated_at"])
+        # Use queue's voice_agent_id (overrides job's)
+        agent_id = queue.voice_agent_id or job.voice_agent_id
+        if not agent_id:
+            item.status = CallQueueItem.Status.FAILED
+            item.error_message = "No voice_agent_id configured on queue or job"
+            item.save(update_fields=["status", "error_message", "updated_at"])
+            _update_queue_failed_count(queue)
+            return None
+
+        # Mark item as CALLING (inside atomic block to prevent race conditions)
+        item.status = CallQueueItem.Status.CALLING
+        item.attempts += 1
+        item.last_attempt_at = timezone.now()
+        item.save(update_fields=["status", "attempts", "last_attempt_at", "updated_at"])
 
     # Update queue total_called counter
     from .models import CallQueue

@@ -97,16 +97,22 @@ def generate_scorecard(self, call_record_id: str, tenant_id: str) -> Optional[st
     raw = call_record.raw_response or {}
     scores = raw.get("scores", raw.get("score", {})) or {}
 
-    comm_score = float(scores.get("communication", scores.get("communicationScore", 0)) or 0)
-    know_score = float(scores.get("knowledge", scores.get("knowledgeScore", 0)) or 0)
-    conf_score = float(scores.get("confidence", scores.get("confidenceScore", 0)) or 0)
-    rel_score = float(scores.get("relevance", scores.get("relevanceScore", 0)) or 0)
+    def _normalize_score(val: float) -> float:
+        """Normalize score to 0-10 scale. Values > 10 are assumed to be on a 0-100 scale."""
+        if val > 10:
+            return round(val / 10, 2)
+        return round(val, 2)
+
+    comm_score = _normalize_score(float(scores.get("communication", scores.get("communicationScore", 0)) or 0))
+    know_score = _normalize_score(float(scores.get("knowledge", scores.get("knowledgeScore", 0)) or 0))
+    conf_score = _normalize_score(float(scores.get("confidence", scores.get("confidenceScore", 0)) or 0))
+    rel_score = _normalize_score(float(scores.get("relevance", scores.get("relevanceScore", 0)) or 0))
 
     if any([comm_score, know_score, conf_score, rel_score]):
         overall = round((comm_score + know_score + conf_score + rel_score) / 4, 2)
     else:
         # Fall back to top-level score fields
-        overall = float(scores.get("overall", scores.get("overallScore", 0)) or 0)
+        overall = _normalize_score(float(scores.get("overall", scores.get("overallScore", 0)) or 0))
 
     # Determine recommendation based on overall score
     if overall >= 8.0:
