@@ -1,16 +1,22 @@
 """
 Google Calendar Integration — create, update, cancel events with Google Meet links.
 
-Uses a Google Cloud service account with domain-wide delegation.
-Configure via environment variables:
-    GOOGLE_CALENDAR_CREDENTIALS_JSON — Service account key JSON (raw JSON string)
-    GOOGLE_CALENDAR_DELEGATE_EMAIL   — Admin email for domain-wide delegation
+Supports two modes:
+1. **Service account with domain-wide delegation** (Google Workspace):
+   Set both GOOGLE_CALENDAR_CREDENTIALS_JSON and GOOGLE_CALENDAR_DELEGATE_EMAIL.
+   Events are created on behalf of the delegate user's calendar.
+
+2. **Service account direct** (regular Gmail / no Workspace):
+   Set only GOOGLE_CALENDAR_CREDENTIALS_JSON (leave DELEGATE_EMAIL blank).
+   Events are created on the service account's own calendar.
+   Attendees still receive email invitations with Google Meet links.
 
 If credentials are not configured, all functions return gracefully
 so interview CRUD is never blocked by missing calendar config.
 """
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -33,15 +39,18 @@ def _get_calendar_service():
     """
     Build and return an authenticated Google Calendar API service.
 
+    Uses domain-wide delegation if DELEGATE_EMAIL is set,
+    otherwise uses the service account's own calendar.
+
     Raises CalendarNotConfigured if credentials are missing.
     """
     credentials_json = getattr(settings, "GOOGLE_CALENDAR_CREDENTIALS_JSON", "")
     delegate_email = getattr(settings, "GOOGLE_CALENDAR_DELEGATE_EMAIL", "")
 
-    if not credentials_json or not delegate_email:
+    if not credentials_json:
         raise CalendarNotConfigured(
             "Google Calendar is not configured. "
-            "Set GOOGLE_CALENDAR_CREDENTIALS_JSON and GOOGLE_CALENDAR_DELEGATE_EMAIL."
+            "Set GOOGLE_CALENDAR_CREDENTIALS_JSON."
         )
 
     try:
@@ -63,10 +72,12 @@ def _get_calendar_service():
             creds_info,
             scopes=["https://www.googleapis.com/auth/calendar"],
         )
-        # Delegate to the admin email so events appear on real calendars
-        delegated = credentials.with_subject(delegate_email)
 
-        service = build("calendar", "v3", credentials=delegated, cache_discovery=False)
+        # If delegate email is set (Google Workspace), impersonate that user
+        if delegate_email:
+            credentials = credentials.with_subject(delegate_email)
+
+        service = build("calendar", "v3", credentials=credentials, cache_discovery=False)
         return service
     except Exception as exc:
         raise CalendarAPIError(f"Failed to initialize Google Calendar service: {exc}") from exc
@@ -75,8 +86,7 @@ def _get_calendar_service():
 def is_configured() -> bool:
     """Check whether Google Calendar credentials are present in settings."""
     credentials_json = getattr(settings, "GOOGLE_CALENDAR_CREDENTIALS_JSON", "")
-    delegate_email = getattr(settings, "GOOGLE_CALENDAR_DELEGATE_EMAIL", "")
-    return bool(credentials_json and delegate_email)
+    return bool(credentials_json)
 
 
 def create_event(
@@ -116,7 +126,7 @@ def create_event(
         "attendees": [{"email": email} for email in attendees if email],
         "conferenceData": {
             "createRequest": {
-                "requestId": f"smarthr-{start_time.strftime('%Y%m%d%H%M%S')}",
+                "requestId": f"smarthr-{uuid.uuid4().hex[:12]}",
                 "conferenceSolutionKey": {"type": "hangoutsMeet"},
             }
         },
@@ -129,7 +139,7 @@ def create_event(
         },
     }
 
-    # Add interviewer as organizer attendee
+    # Add interviewer as attendee
     if interviewer_email:
         existing_emails = {a["email"] for a in event_body["attendees"]}
         if interviewer_email not in existing_emails:
