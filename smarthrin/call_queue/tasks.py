@@ -559,3 +559,66 @@ def tick_running_queues() -> None:
     for q in running_queues:
         process_call_queue.delay(str(q["id"]), str(q["tenant_id"]))
         logger.debug(f"Ticked queue {q['id']} for tenant {q['tenant_id']}")
+
+
+# Maximum time a queue item can stay in CALLING status before it's considered stuck
+STUCK_CALLING_TIMEOUT_MINUTES = 10
+
+
+@shared_task
+def cleanup_stuck_queue_items() -> None:
+    """
+    Periodic task (every 5 minutes) — find CallQueueItems stuck in CALLING
+    status for longer than STUCK_CALLING_TIMEOUT_MINUTES and either retry
+    them or mark as FAILED.
+    """
+    from datetime import timedelta
+    from django.utils import timezone
+    from .models import CallQueue, CallQueueItem
+
+    cutoff = timezone.now() - timedelta(minutes=STUCK_CALLING_TIMEOUT_MINUTES)
+
+    stuck_items = (
+        CallQueueItem.objects
+        .select_related("queue", "call_record")
+        .filter(
+            status=CallQueueItem.Status.CALLING,
+            last_attempt_at__lt=cutoff,
+        )
+    )
+
+    cleaned = 0
+    retried = 0
+    for item in stuck_items:
+        config = item.queue.get_config()
+        max_retries = int(config.get("max_retries", 2))
+
+        # Mark linked call record as FAILED if still active
+        if item.call_record and item.call_record.status in ("QUEUED", "INITIATED", "RINGING", "IN_PROGRESS"):
+            item.call_record.status = "FAILED"
+            item.call_record.error_message = "Call timed out (stuck in CALLING)"
+            item.call_record.save(update_fields=["status", "error_message", "updated_at"])
+
+        if item.attempts < max_retries:
+            # Reset to PENDING for retry
+            item.status = CallQueueItem.Status.PENDING
+            item.error_message = f"Reset from stuck CALLING state after {STUCK_CALLING_TIMEOUT_MINUTES}m (attempt {item.attempts}/{max_retries})"
+            item.save(update_fields=["status", "error_message", "updated_at"])
+            retried += 1
+            logger.info(f"Stuck QueueItem {item.id} reset to PENDING for retry (attempt {item.attempts}/{max_retries})")
+        else:
+            # Exhausted retries — mark as FAILED
+            item.status = CallQueueItem.Status.FAILED
+            item.error_message = f"Stuck in CALLING for >{STUCK_CALLING_TIMEOUT_MINUTES}m after {item.attempts} attempts"
+            item.save(update_fields=["status", "error_message", "updated_at"])
+            _update_queue_failed_count(item.queue)
+            _notify_item_failure_if_exhausted(item, item.queue, str(item.tenant_id))
+            cleaned += 1
+            logger.info(f"Stuck QueueItem {item.id} marked FAILED (exhausted {item.attempts} attempts)")
+
+        # Re-trigger queue processing
+        if item.queue.status == CallQueue.Status.RUNNING:
+            process_call_queue.delay(str(item.queue_id), str(item.tenant_id))
+
+    if cleaned or retried:
+        logger.info(f"Stuck queue item cleanup: {retried} retried, {cleaned} failed")
