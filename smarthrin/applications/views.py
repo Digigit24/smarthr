@@ -182,10 +182,10 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
         description=(
             "Export filtered applications as CSV or Excel. "
             "Supports the same query params as the list endpoint (status, job_id, applicant_id, etc.). "
-            "Use `format=xlsx` for Excel or `format=csv` (default) for CSV."
+            "Use `export_format=xlsx` for Excel or `export_format=csv` (default) for CSV."
         ),
         parameters=[
-            OpenApiParameter("format", OpenApiTypes.STR, enum=["csv", "xlsx"], description="Export format (default: csv)"),
+            OpenApiParameter("export_format", OpenApiTypes.STR, enum=["csv", "xlsx"], description="Export format (default: csv)"),
             OpenApiParameter("status", OpenApiTypes.STR, description="Filter by status"),
             OpenApiParameter("job_id", OpenApiTypes.UUID, description="Filter by job ID"),
             OpenApiParameter("applicant_id", OpenApiTypes.UUID, description="Filter by applicant ID"),
@@ -202,7 +202,7 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
         from common.export import build_csv_response, build_excel_response
 
         qs = self.filter_queryset(self.get_queryset()).select_related("applicant", "job")
-        export_format = request.query_params.get("format", "csv").lower()
+        export_format = request.query_params.get("export_format", "csv").lower()
 
         columns = [
             ("applicant_name", "Applicant Name"),

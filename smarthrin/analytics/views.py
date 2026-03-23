@@ -103,7 +103,7 @@ def timeline(request: Request) -> Response:
         "Use `report` param to select a specific report or get all combined."
     ),
     parameters=[
-        OpenApiParameter("format", OpenApiTypes.STR, enum=["csv", "xlsx"], description="Export format (default: csv)"),
+        OpenApiParameter("export_format", OpenApiTypes.STR, enum=["csv", "xlsx"], description="Export format (default: csv)"),
         OpenApiParameter("report", OpenApiTypes.STR, enum=["funnel", "scores", "timeline", "all"],
             description="Which report to export (default: all)"),
         OpenApiParameter("period", OpenApiTypes.STR, enum=["7d", "30d", "90d"],
@@ -119,7 +119,7 @@ def export_report(request: Request):
     from common.export import build_csv_response, build_excel_response
 
     tenant_id = str(request.tenant_id)
-    export_format = request.query_params.get("format", "csv").lower()
+    export_format = request.query_params.get("export_format", "csv").lower()
     report_type = request.query_params.get("report", "all").lower()
     period = request.query_params.get("period", "30d")
 

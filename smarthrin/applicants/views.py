@@ -139,7 +139,7 @@ class ApplicantViewSet(TenantViewSetMixin, ModelViewSet):
             "Use `format=xlsx` for Excel or `format=csv` (default) for CSV."
         ),
         parameters=[
-            OpenApiParameter("format", OpenApiTypes.STR, enum=["csv", "xlsx"], description="Export format (default: csv)"),
+            OpenApiParameter("export_format", OpenApiTypes.STR, enum=["csv", "xlsx"], description="Export format (default: csv)"),
             OpenApiParameter("source", OpenApiTypes.STR, description="Filter by source"),
             OpenApiParameter("search", OpenApiTypes.STR, description="Search in name/email"),
             OpenApiParameter("experience_years_gte", OpenApiTypes.NUMBER, description="Min experience years"),
@@ -155,7 +155,7 @@ class ApplicantViewSet(TenantViewSetMixin, ModelViewSet):
         from common.export import build_csv_response, build_excel_response
 
         qs = self.filter_queryset(self.get_queryset())
-        export_format = request.query_params.get("format", "csv").lower()
+        export_format = request.query_params.get("export_format", "csv").lower()
 
         columns = [
             ("first_name", "First Name"),
