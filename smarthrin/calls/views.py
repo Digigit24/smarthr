@@ -12,6 +12,7 @@ from common.mixins import TenantViewSetMixin
 from common.pagination import StandardResultsPagination
 from common.permissions import require_permission
 
+from .agent_cache import get_cached_agents, set_cached_agents
 from .filters import CallRecordFilterSet, ScorecardFilterSet
 from .models import CallRecord, Scorecard
 from .serializers import (
@@ -171,12 +172,24 @@ class AvailableVoiceAgentsView(APIView):
         responses={200: AvailableAgentSerializer(many=True)},
     )
     def get(self, request):
+        tenant_id = str(request.tenant_id)
+        cache_params = dict(is_active=True)
+
+        # Try cache first
+        cached = get_cached_agents(tenant_id, **cache_params)
+        if cached is not None:
+            serializer = AvailableAgentSerializer(cached, many=True)
+            return Response(serializer.data)
+
         from .services import AIScreeningService
         service = AIScreeningService()
-        agents = service.list_available_agents(str(request.tenant_id))
+        agents = service.list_available_agents(tenant_id)
         # agents is a list from voice_client.list_agents(is_active=True)
         # It may be a dict with items key or a list directly
         if isinstance(agents, dict):
             agents = agents.get("items", agents.get("agents", []))
+
+        set_cached_agents(tenant_id, agents, **cache_params)
+
         serializer = AvailableAgentSerializer(agents, many=True)
         return Response(serializer.data)

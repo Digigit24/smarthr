@@ -1,4 +1,6 @@
 """Applicant model."""
+from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.operations import TrigramExtension
 from django.db import models
 
 from common.models import TenantBaseModel
@@ -32,6 +34,9 @@ class Applicant(TenantBaseModel):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["tenant_id", "email"]),
+            GinIndex(fields=["first_name"], name="applicant_first_name_trgm", opclasses=["gin_trgm_ops"]),
+            GinIndex(fields=["last_name"], name="applicant_last_name_trgm", opclasses=["gin_trgm_ops"]),
+            GinIndex(fields=["email"], name="applicant_email_trgm", opclasses=["gin_trgm_ops"]),
         ]
         constraints = [
             models.UniqueConstraint(
