@@ -95,8 +95,21 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
             "partial_update": require_permission("smarthrin.applications.edit"),
             "change_status": require_permission("smarthrin.applications.edit"),
             "trigger_ai_call": require_permission("smarthrin.calls.create"),
-            "bulk_action": require_permission("smarthrin.applications.edit"),
+            "destroy": require_permission("smarthrin.applications.delete"),
         }
+
+        if self.action == "bulk_action":
+            # Resolve permission based on the action param in the request body
+            bulk_perm_map = {
+                "change_status": "smarthrin.applications.edit",
+                "delete": "smarthrin.applications.delete",
+                "trigger_ai_call": "smarthrin.calls.create",
+                "add_to_queue": "smarthrin.calls.create",
+            }
+            bulk_action_type = self.request.data.get("action", "")
+            perm = bulk_perm_map.get(bulk_action_type, "smarthrin.applications.edit")
+            return [require_permission(perm)()]
+
         perm_class = action_permission_map.get(
             self.action, require_permission("smarthrin.applications.view")
         )
@@ -280,27 +293,33 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
     @extend_schema(
         tags=["Applications"],
         summary="Bulk action on applications",
-        description="Apply an action (e.g. change_status) to multiple applications at once.",
+        description=(
+            "Apply an action to multiple applications at once.\n\n"
+            "Supported actions:\n"
+            "- `change_status`: requires `status` field\n"
+            "- `delete`: permanently deletes the applications\n"
+            "- `trigger_ai_call`: dispatches AI screening calls (async via Celery)\n"
+            "- `add_to_queue`: adds applications to a call queue; requires `queue_id`"
+        ),
         request=BulkActionSerializer,
         responses={200: inline_serializer("BulkActionResponse", fields={
-            "updated": drf_serializers.IntegerField(),
+            "affected": drf_serializers.IntegerField(),
             "action": drf_serializers.CharField(),
+            "errors": drf_serializers.ListField(child=drf_serializers.DictField(), required=False),
         })},
     )
     @action(detail=False, methods=["post"], url_path="bulk-action", url_name="bulk-action")
     def bulk_action(self, request):
         """
-        Bulk update applications.
-        Body: { application_ids: [...], action: "change_status", status: "..." }
+        Bulk operations on applications.
+        Body: { application_ids: [...], action: "...", status?: "...", queue_id?: "..." }
         """
-        application_ids = request.data.get("application_ids", [])
-        bulk_action_type = request.data.get("action")
-        new_status = request.data.get("status")
+        serializer = BulkActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
 
-        if not application_ids:
-            raise ValidationError({"application_ids": "This field is required."})
-        if not bulk_action_type:
-            raise ValidationError({"action": "This field is required."})
+        application_ids = data["application_ids"]
+        bulk_action_type = data["action"]
 
         qs = Application.objects.filter(
             pk__in=application_ids,
@@ -308,12 +327,13 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
         )
 
         if bulk_action_type == "change_status":
-            valid_statuses = [choice[0] for choice in Application.Status.choices]
-            if not new_status or new_status not in valid_statuses:
-                raise ValidationError(
-                    {"status": f"Invalid status. Must be one of: {', '.join(valid_statuses)}"}
-                )
-            updated_count = qs.update(status=new_status)
+            result = self._bulk_change_status(qs, data)
+        elif bulk_action_type == "delete":
+            result = self._bulk_delete(qs)
+        elif bulk_action_type == "trigger_ai_call":
+            result = self._bulk_trigger_ai_call(qs, request)
+        elif bulk_action_type == "add_to_queue":
+            result = self._bulk_add_to_queue(qs, data, request)
         else:
             raise ValidationError({"action": f"Unsupported bulk action: {bulk_action_type}"})
 
@@ -328,12 +348,124 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
             metadata={
                 "action": bulk_action_type,
                 "application_ids": [str(aid) for aid in application_ids],
-                "new_status": new_status,
-                "updated_count": updated_count,
+                **result,
             },
         )
 
         return Response(
-            {"updated": updated_count, "action": bulk_action_type},
+            {"action": bulk_action_type, **result},
             status=status.HTTP_200_OK,
         )
+
+    # -- Bulk action handlers ------------------------------------------------
+
+    @staticmethod
+    def _bulk_change_status(qs, data):
+        new_status = data.get("status")
+        valid_statuses = [choice[0] for choice in Application.Status.choices]
+        if not new_status or new_status not in valid_statuses:
+            raise ValidationError(
+                {"status": f"Invalid status. Must be one of: {', '.join(valid_statuses)}"}
+            )
+        affected = qs.update(status=new_status)
+        return {"affected": affected}
+
+    @staticmethod
+    def _bulk_delete(qs):
+        affected, _ = qs.delete()
+        return {"affected": affected}
+
+    @staticmethod
+    def _bulk_trigger_ai_call(qs, request):
+        from calls.tasks import dispatch_ai_call
+
+        dispatched = 0
+        errors = []
+        for app in qs.select_related("job", "applicant"):
+            # Skip applications that already have an active call or aren't suitable
+            if app.status in (Application.Status.AI_SCREENING, Application.Status.REJECTED, Application.Status.WITHDRAWN):
+                errors.append({"application_id": str(app.pk), "error": f"Cannot call — status is {app.status}"})
+                continue
+            if not app.job.voice_agent_id:
+                errors.append({"application_id": str(app.pk), "error": "Job has no voice_agent_id configured"})
+                continue
+            if not app.applicant.phone:
+                errors.append({"application_id": str(app.pk), "error": "Applicant has no phone number"})
+                continue
+
+            app.status = Application.Status.AI_SCREENING
+            app.save(update_fields=["status", "updated_at"])
+
+            dispatch_ai_call.delay(
+                str(app.pk),
+                str(request.tenant_id),
+                str(request.user_id),
+            )
+            dispatched += 1
+
+        result = {"affected": dispatched}
+        if errors:
+            result["errors"] = errors
+        return result
+
+    @staticmethod
+    def _bulk_add_to_queue(qs, data, request):
+        from call_queue.models import CallQueue, CallQueueItem
+
+        queue_id = data.get("queue_id")
+        if not queue_id:
+            raise ValidationError({"queue_id": "This field is required for add_to_queue action."})
+
+        try:
+            queue = CallQueue.objects.get(
+                id=queue_id,
+                tenant_id=request.tenant_id,
+            )
+        except CallQueue.DoesNotExist:
+            raise ValidationError({"queue_id": "Call queue not found."})
+
+        if queue.status not in (CallQueue.Status.DRAFT, CallQueue.Status.PAUSED):
+            raise ValidationError(
+                {"queue_id": f"Queue is '{queue.status}'. Must be DRAFT or PAUSED to add items."}
+            )
+
+        # Get existing queue application IDs to skip duplicates
+        existing_app_ids = set(
+            CallQueueItem.objects.filter(queue=queue).values_list("application_id", flat=True)
+        )
+
+        # Determine next position
+        last_position = (
+            CallQueueItem.objects.filter(queue=queue)
+            .order_by("-position")
+            .values_list("position", flat=True)
+            .first()
+            or 0
+        )
+
+        items_to_create = []
+        skipped = 0
+        for app in qs:
+            if app.pk in existing_app_ids:
+                skipped += 1
+                continue
+            last_position += 1
+            items_to_create.append(
+                CallQueueItem(
+                    queue=queue,
+                    application=app,
+                    position=last_position,
+                    status=CallQueueItem.Status.PENDING,
+                    tenant_id=str(request.tenant_id),
+                    owner_user_id=str(request.user_id),
+                )
+            )
+
+        if items_to_create:
+            CallQueueItem.objects.bulk_create(items_to_create)
+            total_queued = CallQueueItem.objects.filter(queue=queue).count()
+            queue.total_queued = total_queued
+            queue.save(update_fields=["total_queued", "updated_at"])
+
+        added = len(items_to_create)
+        return {"affected": added, "skipped": skipped, "queue_id": str(queue_id)}

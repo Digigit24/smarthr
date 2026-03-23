@@ -175,9 +175,15 @@ class ChangeStatusSerializer(serializers.Serializer):
 
 
 class BulkActionSerializer(serializers.Serializer):
-    application_ids = serializers.ListField(child=serializers.UUIDField(), min_length=1)
-    action = serializers.ChoiceField(choices=[("change_status", "Change Status")])
+    application_ids = serializers.ListField(child=serializers.UUIDField(), min_length=1, max_length=500)
+    action = serializers.ChoiceField(choices=[
+        ("change_status", "Change Status"),
+        ("delete", "Delete"),
+        ("trigger_ai_call", "Trigger AI Call"),
+        ("add_to_queue", "Add to Queue"),
+    ])
     status = serializers.ChoiceField(choices=Application.Status.choices, required=False)
+    queue_id = serializers.UUIDField(required=False, help_text="Required for add_to_queue action.")
 
 
 class TriggerAICallResponseSerializer(serializers.Serializer):
