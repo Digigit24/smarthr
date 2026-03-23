@@ -6,4 +6,5 @@ urlpatterns = [
     path("funnel/", views.funnel, name="analytics-funnel"),
     path("scores/", views.scores, name="analytics-scores"),
     path("timeline/", views.timeline, name="analytics-timeline"),
+    path("export/", views.export_report, name="analytics-export"),
 ]
