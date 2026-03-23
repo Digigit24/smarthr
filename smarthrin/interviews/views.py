@@ -1,4 +1,6 @@
 """Views for the Interview resource."""
+import logging
+
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter
 from drf_spectacular.types import OpenApiTypes
 from rest_framework import status
@@ -16,6 +18,110 @@ from common.permissions import require_permission
 from .filters import InterviewFilterSet
 from .models import Interview
 from .serializers import InterviewDetailSerializer, InterviewListSerializer, InterviewCreateSerializer, CompleteInterviewSerializer
+
+logger = logging.getLogger(__name__)
+
+
+def _sync_calendar_create(interview: Interview) -> dict:
+    """
+    Try to create a Google Calendar event for the interview.
+
+    Returns {"calendar_event_id": str, "meeting_link": str} on success,
+    or an empty dict if calendar is not configured or the API call fails.
+    """
+    from integrations.google_calendar import (
+        CalendarNotConfigured,
+        CalendarAPIError,
+        create_event,
+        is_configured,
+    )
+
+    if not is_configured():
+        return {}
+
+    applicant_email = ""
+    applicant_name = ""
+    job_title = ""
+    try:
+        applicant_email = interview.application.applicant.email
+        applicant_name = interview.application.applicant.full_name
+        job_title = interview.application.job.title
+    except AttributeError:
+        pass
+
+    attendees = [email for email in [interview.interviewer_email, applicant_email] if email]
+    title = f"Interview: {applicant_name}" + (f" — {job_title}" if job_title else "")
+    description = (
+        f"Interview Type: {interview.get_interview_type_display()}\n"
+        f"Candidate: {applicant_name} ({applicant_email})\n"
+        f"Interviewer: {interview.interviewer_name}"
+    )
+
+    try:
+        result = create_event(
+            interviewer_email=interview.interviewer_email,
+            attendees=attendees,
+            start_time=interview.scheduled_at,
+            duration_minutes=interview.duration_minutes,
+            title=title,
+            description=description,
+        )
+        return {
+            "calendar_event_id": result["event_id"],
+            "meeting_link": result["meeting_link"],
+        }
+    except CalendarNotConfigured:
+        return {}
+    except CalendarAPIError:
+        logger.exception("Failed to create Google Calendar event for interview %s", interview.pk)
+        return {}
+
+
+def _sync_calendar_update(interview: Interview) -> None:
+    """Try to update the Google Calendar event when interview is rescheduled."""
+    from integrations.google_calendar import (
+        CalendarNotConfigured,
+        CalendarAPIError,
+        update_event,
+    )
+
+    if not interview.calendar_event_id:
+        return
+
+    applicant_email = ""
+    try:
+        applicant_email = interview.application.applicant.email
+    except AttributeError:
+        pass
+
+    attendees = [email for email in [interview.interviewer_email, applicant_email] if email]
+
+    try:
+        update_event(
+            event_id=interview.calendar_event_id,
+            start_time=interview.scheduled_at,
+            duration_minutes=interview.duration_minutes,
+            attendees=attendees,
+        )
+    except (CalendarNotConfigured, CalendarAPIError):
+        logger.exception("Failed to update Google Calendar event %s", interview.calendar_event_id)
+
+
+def _sync_calendar_cancel(interview: Interview) -> None:
+    """Try to cancel the Google Calendar event."""
+    from integrations.google_calendar import (
+        CalendarNotConfigured,
+        CalendarAPIError,
+        cancel_event,
+    )
+
+    if not interview.calendar_event_id:
+        return
+
+    try:
+        cancel_event(interview.calendar_event_id)
+    except (CalendarNotConfigured, CalendarAPIError):
+        logger.exception("Failed to cancel Google Calendar event %s", interview.calendar_event_id)
 
 
 @extend_schema_view(
@@ -35,6 +141,10 @@ from .serializers import InterviewDetailSerializer, InterviewListSerializer, Int
     create=extend_schema(
         tags=["Interviews"],
         summary="Schedule an interview",
+        description=(
+            "Schedule a new interview. If Google Calendar is configured, a calendar event "
+            "with a Google Meet link is automatically created and returned in the response."
+        ),
         request=InterviewCreateSerializer,
         responses={201: InterviewDetailSerializer},
     ),
@@ -46,6 +156,7 @@ from .serializers import InterviewDetailSerializer, InterviewListSerializer, Int
     update=extend_schema(
         tags=["Interviews"],
         summary="Update interview",
+        description="Update interview details. Calendar event is automatically updated if rescheduled.",
         request=InterviewCreateSerializer,
         responses={200: InterviewDetailSerializer},
     ),
@@ -64,7 +175,7 @@ from .serializers import InterviewDetailSerializer, InterviewListSerializer, Int
 class InterviewViewSet(TenantViewSetMixin, ModelViewSet):
     """CRUD + cancel/complete extra actions for Interview."""
 
-    queryset = Interview.objects.select_related("application", "application__applicant").all()
+    queryset = Interview.objects.select_related("application", "application__applicant", "application__job").all()
     authentication_classes = [JWTRequestAuthentication]
     pagination_class = StandardResultsPagination
     filterset_class = InterviewFilterSet
@@ -98,17 +209,55 @@ class InterviewViewSet(TenantViewSetMixin, ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
-        response_serializer = InterviewDetailSerializer(serializer.instance)
-        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+        interview = serializer.instance
+
+        # Sync to Google Calendar (creates event + Meet link)
+        calendar_data = _sync_calendar_create(interview)
+        if calendar_data:
+            update_fields = ["updated_at"]
+            if calendar_data.get("calendar_event_id"):
+                interview.calendar_event_id = calendar_data["calendar_event_id"]
+                update_fields.append("calendar_event_id")
+            if calendar_data.get("meeting_link"):
+                interview.meeting_link = calendar_data["meeting_link"]
+                update_fields.append("meeting_link")
+            if len(update_fields) > 1:
+                interview.save(update_fields=update_fields)
+
+        response_serializer = InterviewDetailSerializer(interview)
+        data = response_serializer.data
+        if not calendar_data and not interview.meeting_link:
+            data["_calendar_sync"] = "skipped"
+        return Response(data, status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
+        old_scheduled_at = instance.scheduled_at
+        old_duration = instance.duration_minutes
+
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
-        response_serializer = InterviewDetailSerializer(serializer.instance)
+
+        interview = serializer.instance
+
+        # If rescheduled, update the calendar event
+        rescheduled = (
+            interview.scheduled_at != old_scheduled_at
+            or interview.duration_minutes != old_duration
+        )
+        if rescheduled and interview.calendar_event_id:
+            _sync_calendar_update(interview)
+
+        response_serializer = InterviewDetailSerializer(interview)
         return Response(response_serializer.data)
+
+    def perform_destroy(self, instance):
+        # Cancel calendar event before deleting
+        _sync_calendar_cancel(instance)
+        super().perform_destroy(instance)
 
     def perform_create(self, serializer):
         super().perform_create(serializer)
@@ -129,16 +278,20 @@ class InterviewViewSet(TenantViewSetMixin, ModelViewSet):
     @extend_schema(
         tags=["Interviews"],
         summary="Cancel interview",
-        description="Sets the interview status to CANCELLED.",
+        description="Sets the interview status to CANCELLED and cancels the Google Calendar event if present.",
         request=None,
         responses={200: InterviewDetailSerializer},
     )
     @action(detail=True, methods=["post"], url_path="cancel")
     def cancel(self, request, pk=None):
-        """Cancel an interview — sets status to CANCELLED."""
+        """Cancel an interview — sets status to CANCELLED and cancels calendar event."""
         interview = self.get_object()
         interview.status = Interview.Status.CANCELLED
         interview.save(update_fields=["status", "updated_at"])
+
+        # Cancel the Google Calendar event
+        _sync_calendar_cancel(interview)
+
         log_activity_for_request(
             request,
             verb=Activity.Verb.INTERVIEW_CANCELLED,
