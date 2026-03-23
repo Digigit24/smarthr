@@ -33,6 +33,10 @@ SUPERADMIN_URL = env("SUPERADMIN_URL", default="https://admin.celiyo.com")
 VOICE_AI_API_URL = env("VOICE_AI_API_URL", default="http://localhost:4000")
 VOICE_AI_API_KEY = env("VOICE_AI_API_KEY", default="")
 
+# Google Calendar (optional — leave blank to disable calendar sync)
+GOOGLE_CALENDAR_CREDENTIALS_JSON = env("GOOGLE_CALENDAR_CREDENTIALS_JSON", default="")
+GOOGLE_CALENDAR_DELEGATE_EMAIL = env("GOOGLE_CALENDAR_DELEGATE_EMAIL", default="")
+
 # Webhooks
 WEBHOOK_SECRET = env("WEBHOOK_SECRET", default="")
 
