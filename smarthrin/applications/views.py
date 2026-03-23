@@ -287,13 +287,9 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
             metadata={"reason": reason},
         )
 
-        if new_status == Application.Status.AI_SCREENING:
-            from calls.tasks import dispatch_ai_call
-            dispatch_ai_call.delay(
-                str(application.pk),
-                str(request.tenant_id),
-                str(request.user_id),
-            )
+        # NOTE: AI call dispatch is handled by the on_application_saved signal
+        # when status changes to AI_SCREENING. Do NOT dispatch here to avoid
+        # double dispatch.
 
         serializer = ApplicationDetailSerializer(
             application, context={"request": request}
@@ -449,8 +445,6 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
 
     @staticmethod
     def _bulk_trigger_ai_call(qs, request):
-        from calls.tasks import dispatch_ai_call
-
         dispatched = 0
         errors = []
         for app in qs.select_related("job", "applicant"):
@@ -465,14 +459,11 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
                 errors.append({"application_id": str(app.pk), "error": "Applicant has no phone number"})
                 continue
 
+            # Setting status to AI_SCREENING and saving triggers the
+            # on_application_saved signal, which dispatches the AI call.
+            # Do NOT also call dispatch_ai_call here (double dispatch bug).
             app.status = Application.Status.AI_SCREENING
             app.save(update_fields=["status", "updated_at"])
-
-            dispatch_ai_call.delay(
-                str(app.pk),
-                str(request.tenant_id),
-                str(request.user_id),
-            )
             dispatched += 1
 
         result = {"affected": dispatched}

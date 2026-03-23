@@ -137,7 +137,7 @@ def process_call_queue(self, queue_id: str, tenant_id: str) -> Optional[str]:
             rejected = CallQueueItem.objects.filter(
                 queue_id=queue_id,
                 status=CallQueueItem.Status.COMPLETED,
-                score__lte=reject_threshold,
+                score__lt=reject_threshold,
             ).count()
 
             create_notification(
@@ -198,7 +198,8 @@ def dispatch_queue_item(self, item_id: str, tenant_id: str) -> Optional[str]:
             logger.info(f"QueueItem {item_id} is {item.status}, skipping dispatch")
             return None
 
-        # Check for existing active call records for this queue item
+        # Check for existing active call records for this application (not just linked items).
+        # This catches orphaned CallRecords that weren't linked back to the queue item.
         active_statuses = [
             CallRecord.Status.QUEUED,
             CallRecord.Status.INITIATED,
@@ -206,10 +207,10 @@ def dispatch_queue_item(self, item_id: str, tenant_id: str) -> Optional[str]:
             CallRecord.Status.IN_PROGRESS,
         ]
         if CallRecord.objects.filter(
-            queue_items__id=item_id,
+            application=item.application,
             status__in=active_statuses,
         ).exists():
-            logger.info(f"QueueItem {item_id} already has an active call record, skipping dispatch")
+            logger.info(f"QueueItem {item_id} already has an active call record for its application, skipping dispatch")
             return None
 
         queue = item.queue
@@ -251,6 +252,22 @@ def dispatch_queue_item(self, item_id: str, tenant_id: str) -> Optional[str]:
         item.last_attempt_at = timezone.now()
         item.save(update_fields=["status", "attempts", "last_attempt_at", "updated_at"])
 
+        # Create CallRecord INSIDE the atomic block so it's rolled back if the
+        # transaction fails, preventing orphaned records.
+        call_record = CallRecord.objects.create(
+            application=application,
+            tenant_id=tenant_id,
+            owner_user_id=queue.owner_user_id,
+            voice_agent_id=str(agent_id),
+            phone=phone,
+            status=CallRecord.Status.QUEUED,
+            provider=CallRecord.Provider.OMNIDIM,
+        )
+
+        # Link CallRecord to queue item immediately (inside the same transaction)
+        item.call_record = call_record
+        item.save(update_fields=["call_record_id", "updated_at"])
+
     # Update queue total_called counter
     from .models import CallQueue
     CallQueue.objects.filter(id=queue.id).update(total_called=models_F_increment("total_called"))
@@ -280,17 +297,6 @@ def dispatch_queue_item(self, item_id: str, tenant_id: str) -> Optional[str]:
         "source": "smarthrin_queue",
     }
 
-    # Create CallRecord
-    call_record = CallRecord.objects.create(
-        application=application,
-        tenant_id=tenant_id,
-        owner_user_id=queue.owner_user_id,
-        voice_agent_id=str(agent_id),
-        phone=phone,
-        status=CallRecord.Status.QUEUED,
-        provider=CallRecord.Provider.OMNIDIM,
-    )
-
     try:
         voice_client = VoiceAIClient()
         response = voice_client.start_call(
@@ -305,10 +311,6 @@ def dispatch_queue_item(self, item_id: str, tenant_id: str) -> Optional[str]:
         call_record.provider = provider_str if provider_str in ["OMNIDIM", "BOLNA"] else "OMNIDIM"
         call_record.status = CallRecord.Status.INITIATED
         call_record.save(update_fields=["provider_call_id", "provider", "status", "updated_at"])
-
-        # Link CallRecord to queue item
-        item.call_record = call_record
-        item.save(update_fields=["call_record_id", "updated_at"])
 
         logger.info(
             f"Queue item {item_id} dispatched: call_record={call_record.id}, "
@@ -342,27 +344,30 @@ def dispatch_queue_item(self, item_id: str, tenant_id: str) -> Optional[str]:
 
     except VoiceAIProviderError as exc:
         logger.warning(f"Provider error for queue item {item_id}: {exc}")
+        # Refresh item from DB to avoid overwriting concurrent changes
+        item.refresh_from_db()
         max_retries = int(config.get("max_retries", 2))
+        call_record.status = CallRecord.Status.FAILED
+        call_record.error_message = str(exc)
+        call_record.save(update_fields=["status", "error_message", "updated_at"])
         if item.attempts < max_retries:
+            # Reset to PENDING; let process_call_queue pick it up naturally
             item.status = CallQueueItem.Status.PENDING
             item.error_message = str(exc)
             item.save(update_fields=["status", "error_message", "updated_at"])
-            call_record.status = CallRecord.Status.FAILED
-            call_record.error_message = str(exc)
-            call_record.save(update_fields=["status", "error_message", "updated_at"])
         else:
             item.status = CallQueueItem.Status.FAILED
             item.error_message = str(exc)
             item.save(update_fields=["status", "error_message", "updated_at"])
-            call_record.status = CallRecord.Status.FAILED
-            call_record.error_message = str(exc)
-            call_record.save(update_fields=["status", "error_message", "updated_at"])
             _update_queue_failed_count(queue)
             _notify_item_failure_if_exhausted(item, queue, tenant_id)
-        raise self.retry(exc=exc, countdown=2 ** self.request.retries * 15)
+        # Trigger queue processing to pick up the retried item or next item
+        process_call_queue.delay(str(queue.id), tenant_id)
+        return None
 
     except VoiceAICredentialsMissing as exc:
         logger.error(f"Credentials missing for queue item {item_id}: {exc}")
+        item.refresh_from_db()
         item.status = CallQueueItem.Status.FAILED
         item.error_message = str(exc)
         item.save(update_fields=["status", "error_message", "updated_at"])
@@ -375,22 +380,27 @@ def dispatch_queue_item(self, item_id: str, tenant_id: str) -> Optional[str]:
 
     except VoiceAIError as exc:
         logger.error(f"VoiceAI error for queue item {item_id}: {exc}")
+        item.refresh_from_db()
         max_retries = int(config.get("max_retries", 2))
-        if item.attempts < max_retries:
-            item.status = CallQueueItem.Status.PENDING
-        else:
-            item.status = CallQueueItem.Status.FAILED
-            _update_queue_failed_count(queue)
-            _notify_item_failure_if_exhausted(item, queue, tenant_id)
-        item.error_message = str(exc)
-        item.save(update_fields=["status", "error_message", "updated_at"])
         call_record.status = CallRecord.Status.FAILED
         call_record.error_message = str(exc)
         call_record.save(update_fields=["status", "error_message", "updated_at"])
-        raise
+        if item.attempts < max_retries:
+            item.status = CallQueueItem.Status.PENDING
+            item.error_message = str(exc)
+            item.save(update_fields=["status", "error_message", "updated_at"])
+        else:
+            item.status = CallQueueItem.Status.FAILED
+            item.error_message = str(exc)
+            item.save(update_fields=["status", "error_message", "updated_at"])
+            _update_queue_failed_count(queue)
+            _notify_item_failure_if_exhausted(item, queue, tenant_id)
+        process_call_queue.delay(str(queue.id), tenant_id)
+        return None
 
     except Exception as exc:
         logger.exception(f"Unexpected error dispatching queue item {item_id}")
+        item.refresh_from_db()
         item.status = CallQueueItem.Status.FAILED
         item.error_message = str(exc)
         item.save(update_fields=["status", "error_message", "updated_at"])
@@ -573,52 +583,73 @@ def cleanup_stuck_queue_items() -> None:
     them or mark as FAILED.
     """
     from datetime import timedelta
+    from django.db import transaction
+    from django.db.models import Q
     from django.utils import timezone
+    from calls.models import CallRecord
     from .models import CallQueue, CallQueueItem
 
     cutoff = timezone.now() - timedelta(minutes=STUCK_CALLING_TIMEOUT_MINUTES)
 
+    # Include items with NULL last_attempt_at (should never happen but prevents permanent stuckness)
     stuck_items = (
         CallQueueItem.objects
+        .select_for_update(skip_locked=True)
         .select_related("queue", "call_record")
         .filter(
             status=CallQueueItem.Status.CALLING,
-            last_attempt_at__lt=cutoff,
+        )
+        .filter(
+            Q(last_attempt_at__lt=cutoff) | Q(last_attempt_at__isnull=True)
         )
     )
 
     cleaned = 0
     retried = 0
-    for item in stuck_items:
-        config = item.queue.get_config()
-        max_retries = int(config.get("max_retries", 2))
+    queues_to_retrigger = set()
 
-        # Mark linked call record as FAILED if still active
-        if item.call_record and item.call_record.status in ("QUEUED", "INITIATED", "RINGING", "IN_PROGRESS"):
-            item.call_record.status = "FAILED"
-            item.call_record.error_message = "Call timed out (stuck in CALLING)"
-            item.call_record.save(update_fields=["status", "error_message", "updated_at"])
+    # Process each stuck item inside a transaction with row locking
+    with transaction.atomic():
+        for item in stuck_items:
+            config = item.queue.get_config()
+            max_retries = int(config.get("max_retries", 2))
 
-        if item.attempts < max_retries:
-            # Reset to PENDING for retry
-            item.status = CallQueueItem.Status.PENDING
-            item.error_message = f"Reset from stuck CALLING state after {STUCK_CALLING_TIMEOUT_MINUTES}m (attempt {item.attempts}/{max_retries})"
-            item.save(update_fields=["status", "error_message", "updated_at"])
-            retried += 1
-            logger.info(f"Stuck QueueItem {item.id} reset to PENDING for retry (attempt {item.attempts}/{max_retries})")
-        else:
-            # Exhausted retries — mark as FAILED
-            item.status = CallQueueItem.Status.FAILED
-            item.error_message = f"Stuck in CALLING for >{STUCK_CALLING_TIMEOUT_MINUTES}m after {item.attempts} attempts"
-            item.save(update_fields=["status", "error_message", "updated_at"])
-            _update_queue_failed_count(item.queue)
-            _notify_item_failure_if_exhausted(item, item.queue, str(item.tenant_id))
-            cleaned += 1
-            logger.info(f"Stuck QueueItem {item.id} marked FAILED (exhausted {item.attempts} attempts)")
+            # Mark linked call record as FAILED if still active (use enum, not strings)
+            active_call_statuses = [
+                CallRecord.Status.QUEUED,
+                CallRecord.Status.INITIATED,
+                CallRecord.Status.RINGING,
+                CallRecord.Status.IN_PROGRESS,
+            ]
+            if item.call_record and item.call_record.status in active_call_statuses:
+                item.call_record.status = CallRecord.Status.FAILED
+                item.call_record.error_message = "Call timed out (stuck in CALLING)"
+                item.call_record.save(update_fields=["status", "error_message", "updated_at"])
 
-        # Re-trigger queue processing
-        if item.queue.status == CallQueue.Status.RUNNING:
-            process_call_queue.delay(str(item.queue_id), str(item.tenant_id))
+            if item.attempts < max_retries:
+                # Reset to PENDING for retry
+                item.status = CallQueueItem.Status.PENDING
+                item.error_message = f"Reset from stuck CALLING state after {STUCK_CALLING_TIMEOUT_MINUTES}m (attempt {item.attempts}/{max_retries})"
+                item.save(update_fields=["status", "error_message", "updated_at"])
+                retried += 1
+                logger.info(f"Stuck QueueItem {item.id} reset to PENDING for retry (attempt {item.attempts}/{max_retries})")
+            else:
+                # Exhausted retries — mark as FAILED
+                item.status = CallQueueItem.Status.FAILED
+                item.error_message = f"Stuck in CALLING for >{STUCK_CALLING_TIMEOUT_MINUTES}m after {item.attempts} attempts"
+                item.save(update_fields=["status", "error_message", "updated_at"])
+                _update_queue_failed_count(item.queue)
+                _notify_item_failure_if_exhausted(item, item.queue, str(item.tenant_id))
+                cleaned += 1
+                logger.info(f"Stuck QueueItem {item.id} marked FAILED (exhausted {item.attempts} attempts)")
+
+            # Collect unique queues to re-trigger (deduplicated)
+            if item.queue.status == CallQueue.Status.RUNNING:
+                queues_to_retrigger.add((str(item.queue_id), str(item.tenant_id)))
+
+    # Re-trigger queue processing once per queue (outside the transaction)
+    for queue_id, t_id in queues_to_retrigger:
+        process_call_queue.delay(queue_id, t_id)
 
     if cleaned or retried:
         logger.info(f"Stuck queue item cleanup: {retried} retried, {cleaned} failed")

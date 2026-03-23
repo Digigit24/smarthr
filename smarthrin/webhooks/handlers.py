@@ -34,35 +34,43 @@ def handle_call_completed(payload: dict[str, Any]) -> dict:
     call_record.raw_response = payload
     call_record.save()
 
-    # 2. Create or update Scorecard
+    # 2. Create Scorecard (if not already created by the Celery task).
+    # Use normalize_score to ensure consistent 0-10 scale regardless of provider.
+    # NOTE: Do NOT set application.status here — the on_scorecard_saved signal
+    # handles auto-routing (SHORTLISTED / REJECTED / AI_COMPLETED) based on thresholds.
     score_data = payload.get("score", {})
     if score_data:
-        scorecard, _ = Scorecard.objects.get_or_create(
-            application=call_record.application,
-            call_record=call_record,
-            defaults={
-                "tenant_id": call_record.tenant_id,
-                "owner_user_id": call_record.owner_user_id,
-            }
-        )
-        scorecard.communication_score = score_data.get("communication", 0)
-        scorecard.knowledge_score = score_data.get("knowledge", 0)
-        scorecard.confidence_score = score_data.get("confidence", 0)
-        scorecard.relevance_score = score_data.get("relevance", 0)
-        scorecard.overall_score = score_data.get("overall", 0)
-        scorecard.summary = payload.get("summary", "")
-        scorecard.strengths = score_data.get("strengths", [])
-        scorecard.weaknesses = score_data.get("weaknesses", [])
-        scorecard.detailed_feedback = score_data.get("detailed_feedback", {})
-        rec = score_data.get("recommendation", "MAYBE")
-        scorecard.recommendation = rec if rec in Scorecard.Recommendation.values else "MAYBE"
-        scorecard.save()
+        from calls.scoring import normalize_score, compute_overall_score, compute_recommendation
 
-        # 3. Update application score
-        application = call_record.application
-        application.score = scorecard.overall_score
-        application.status = Application.Status.AI_COMPLETED
-        application.save(update_fields=["score", "status", "updated_at"])
+        comm = normalize_score(float(score_data.get("communication", 0) or 0))
+        know = normalize_score(float(score_data.get("knowledge", 0) or 0))
+        conf = normalize_score(float(score_data.get("confidence", 0) or 0))
+        rel = normalize_score(float(score_data.get("relevance", 0) or 0))
+        fallback_overall = normalize_score(float(score_data.get("overall", 0) or 0))
+        overall = compute_overall_score(comm, know, conf, rel, fallback_overall)
+        rec_str = compute_recommendation(overall)
+
+        # Only create if one doesn't already exist (Celery task may have beaten us)
+        if not Scorecard.objects.filter(call_record=call_record).exists():
+            scorecard = Scorecard.objects.create(
+                application=call_record.application,
+                call_record=call_record,
+                tenant_id=call_record.tenant_id,
+                owner_user_id=call_record.owner_user_id,
+                communication_score=comm,
+                knowledge_score=know,
+                confidence_score=conf,
+                relevance_score=rel,
+                overall_score=overall,
+                summary=payload.get("summary", ""),
+                strengths=score_data.get("strengths", []),
+                weaknesses=score_data.get("weaknesses", []),
+                detailed_feedback=score_data.get("detailed_feedback", {}),
+                recommendation=rec_str if rec_str in Scorecard.Recommendation.values else "MAYBE",
+            )
+            # on_scorecard_saved signal will set application status via thresholds
+        else:
+            scorecard = Scorecard.objects.filter(call_record=call_record).first()
 
     # 4. Create notification for application owner (in-app + email)
     application = call_record.application

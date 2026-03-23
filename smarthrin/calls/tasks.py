@@ -94,37 +94,20 @@ def generate_scorecard(self, call_record_id: str, tenant_id: str) -> Optional[st
         return None
 
     # Extract scores from raw_response (Voice AI may send structured scores)
+    from .scoring import normalize_score, compute_overall_score, compute_recommendation
+
     raw = call_record.raw_response or {}
     scores = raw.get("scores", raw.get("score", {})) or {}
 
-    def _normalize_score(val: float) -> float:
-        """Normalize score to 0-10 scale. Values > 10 are assumed to be on a 0-100 scale."""
-        if val > 10:
-            return round(val / 10, 2)
-        return round(val, 2)
+    comm_score = normalize_score(float(scores.get("communication", scores.get("communicationScore", 0)) or 0))
+    know_score = normalize_score(float(scores.get("knowledge", scores.get("knowledgeScore", 0)) or 0))
+    conf_score = normalize_score(float(scores.get("confidence", scores.get("confidenceScore", 0)) or 0))
+    rel_score = normalize_score(float(scores.get("relevance", scores.get("relevanceScore", 0)) or 0))
 
-    comm_score = _normalize_score(float(scores.get("communication", scores.get("communicationScore", 0)) or 0))
-    know_score = _normalize_score(float(scores.get("knowledge", scores.get("knowledgeScore", 0)) or 0))
-    conf_score = _normalize_score(float(scores.get("confidence", scores.get("confidenceScore", 0)) or 0))
-    rel_score = _normalize_score(float(scores.get("relevance", scores.get("relevanceScore", 0)) or 0))
+    fallback_overall = normalize_score(float(scores.get("overall", scores.get("overallScore", 0)) or 0))
+    overall = compute_overall_score(comm_score, know_score, conf_score, rel_score, fallback_overall)
 
-    if any([comm_score, know_score, conf_score, rel_score]):
-        overall = round((comm_score + know_score + conf_score + rel_score) / 4, 2)
-    else:
-        # Fall back to top-level score fields
-        overall = _normalize_score(float(scores.get("overall", scores.get("overallScore", 0)) or 0))
-
-    # Determine recommendation based on overall score
-    if overall >= 8.0:
-        recommendation = Scorecard.Recommendation.STRONG_YES
-    elif overall >= 7.0:
-        recommendation = Scorecard.Recommendation.YES
-    elif overall >= 5.0:
-        recommendation = Scorecard.Recommendation.MAYBE
-    elif overall >= 3.0:
-        recommendation = Scorecard.Recommendation.NO
-    else:
-        recommendation = Scorecard.Recommendation.STRONG_NO
+    recommendation = getattr(Scorecard.Recommendation, compute_recommendation(overall))
 
     try:
         scorecard = Scorecard.objects.create(
