@@ -1,2 +1,15 @@
-smarthrin/**/__pycache__
-smarthrin/**/*.pyc
+# Ignore environment files
+.env
+smarthrin/.env
+
+# Ignore logs
+*.log
+alogs/
+smarthrin/alogs/
+
+# Python stuff
+__pycache__/
+*.pyc
+
+# Virtual env
+venv/
