@@ -1,0 +1,22 @@
+{% extends "notifications/email/base.html" %}
+{% block content %}
+<h2>AI Screening Complete</h2>
+<p>The AI voice screening for <strong>{{ applicant_name }}</strong> ({{ job_title }}) has been completed.</p>
+<div class="detail-row">
+  <div class="detail-label">Candidate</div>
+  <div class="detail-value">{{ applicant_name }}</div>
+</div>
+<div class="detail-row">
+  <div class="detail-label">Position</div>
+  <div class="detail-value">{{ job_title }}</div>
+</div>
+{% if score %}
+<div class="detail-row">
+  <div class="detail-label">AI Score</div>
+  <div class="detail-value">{{ score }} / 10</div>
+</div>
+{% endif %}
+{% if dashboard_url %}
+<a class="btn" href="{{ dashboard_url }}">View Results</a>
+{% endif %}
+{% endblock %}

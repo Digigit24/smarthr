@@ -64,19 +64,43 @@ def handle_call_completed(payload: dict[str, Any]) -> dict:
         application.status = Application.Status.AI_COMPLETED
         application.save(update_fields=["score", "status", "updated_at"])
 
-    # 4. Create notification for application owner
+    # 4. Create notification for application owner (in-app + email)
     application = call_record.application
     try:
-        create_notification(
-            tenant_id=str(call_record.tenant_id),
-            owner_user_id=str(call_record.owner_user_id),
-            recipient_user_id=str(application.owner_user_id),
-            notification_type=Notification.NotificationType.IN_APP,
-            category=Notification.Category.CALL,
-            title="AI Screening Call Completed",
-            message=f"AI screening call completed for {application.applicant.first_name} {application.applicant.last_name}.",
-            data={"application_id": str(application.id), "call_record_id": str(call_record.id)},
-        )
+        applicant = application.applicant
+        overall = scorecard.overall_score if score_data else None
+        # Try to resolve owner email for email notification
+        from notifications.services import notify_with_email
+        owner_email = _resolve_owner_email(application)
+        if owner_email:
+            notify_with_email(
+                tenant_id=str(call_record.tenant_id),
+                owner_user_id=str(call_record.owner_user_id),
+                recipient_user_id=str(application.owner_user_id),
+                recipient_email=owner_email,
+                category=Notification.Category.CALL,
+                title="AI Screening Call Completed",
+                message=f"AI screening call completed for {applicant.first_name} {applicant.last_name}.",
+                email_type="ai_screening_complete",
+                extra_data={
+                    "application_id": str(application.id),
+                    "call_record_id": str(call_record.id),
+                    "applicant_name": f"{applicant.first_name} {applicant.last_name}",
+                    "job_title": application.job.title,
+                    "score": str(overall) if overall else None,
+                },
+            )
+        else:
+            create_notification(
+                tenant_id=str(call_record.tenant_id),
+                owner_user_id=str(call_record.owner_user_id),
+                recipient_user_id=str(application.owner_user_id),
+                notification_type=Notification.NotificationType.IN_APP,
+                category=Notification.Category.CALL,
+                title="AI Screening Call Completed",
+                message=f"AI screening call completed for {applicant.first_name} {applicant.last_name}.",
+                data={"application_id": str(application.id), "call_record_id": str(call_record.id)},
+            )
     except Exception as e:
         logger.error(f"Failed to create notification: {e}")
 
@@ -159,6 +183,21 @@ def handle_call_completed(payload: dict[str, Any]) -> dict:
         logger.error(f"Failed to update CallQueueItem on call completion: {e}")
 
     return {"status": "processed", "call_record_id": str(call_record.id)}
+
+
+def _resolve_owner_email(application) -> str:
+    """Resolve owner email from application metadata or user cache."""
+    metadata = getattr(application, "metadata", None) or {}
+    if isinstance(metadata, dict) and metadata.get("owner_email"):
+        return metadata["owner_email"]
+    try:
+        from django.core.cache import cache
+        cached_email = cache.get(f"user_email:{application.owner_user_id}")
+        if cached_email:
+            return cached_email
+    except Exception:
+        pass
+    return ""
 
 
 def handle_call_status(payload: dict[str, Any]) -> dict:
