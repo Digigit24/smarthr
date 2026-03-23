@@ -5,8 +5,9 @@ from django.db import transaction
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, inline_serializer
 from drf_spectacular.types import OpenApiTypes
 from rest_framework import serializers as drf_serializers, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, authentication_classes, permission_classes
 from rest_framework.exceptions import ValidationError
+from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
@@ -31,6 +32,92 @@ from .serializers import (
     BulkActionSerializer,
     TriggerAICallResponseSerializer,
 )
+
+
+# ------------------------------------------------------------------
+# Standalone export view (explicit path avoids DefaultRouter issues)
+# ------------------------------------------------------------------
+
+@extend_schema(
+    tags=["Applications"],
+    summary="Export applications",
+    description=(
+        "Export filtered applications as CSV or Excel. "
+        "Supports the same query params as the list endpoint (status, job_id, applicant_id, etc.). "
+        "Use `export_format=xlsx` for Excel or `export_format=csv` (default) for CSV."
+    ),
+    parameters=[
+        OpenApiParameter("export_format", OpenApiTypes.STR, enum=["csv", "xlsx"], description="Export format (default: csv)"),
+        OpenApiParameter("status", OpenApiTypes.STR, description="Filter by status"),
+        OpenApiParameter("job_id", OpenApiTypes.UUID, description="Filter by job ID"),
+        OpenApiParameter("applicant_id", OpenApiTypes.UUID, description="Filter by applicant ID"),
+        OpenApiParameter("score_gte", OpenApiTypes.NUMBER, description="Minimum score"),
+        OpenApiParameter("score_lte", OpenApiTypes.NUMBER, description="Maximum score"),
+        OpenApiParameter("created_at_gte", OpenApiTypes.DATE, description="Created after date"),
+        OpenApiParameter("created_at_lte", OpenApiTypes.DATE, description="Created before date"),
+    ],
+    responses={200: None},
+)
+@api_view(["GET"])
+@authentication_classes([JWTRequestAuthentication])
+@permission_classes([require_permission("smarthrin.applications.view")])
+def export_applications(request: Request):
+    """Export filtered applications to CSV or Excel."""
+    import datetime
+    from common.export import build_csv_response, build_excel_response
+
+    qs = Application.objects.select_related("applicant", "job").filter(
+        tenant_id=request.tenant_id,
+    )
+
+    # Apply filters from query params
+    filterset = ApplicationFilterSet(request.query_params, queryset=qs, request=request)
+    qs = filterset.qs
+
+    export_format = request.query_params.get("export_format", "csv").lower()
+
+    columns = [
+        ("applicant_name", "Applicant Name"),
+        ("applicant_email", "Applicant Email"),
+        ("applicant_phone", "Applicant Phone"),
+        ("job_title", "Job Title"),
+        ("status", "Status"),
+        ("score", "Score"),
+        ("rejection_reason", "Rejection Reason"),
+        ("notes", "Notes"),
+        ("created_at", "Applied At"),
+        ("updated_at", "Last Updated"),
+    ]
+
+    rows = []
+    for app in qs.iterator():
+        rows.append({
+            "applicant_name": f"{app.applicant.first_name} {app.applicant.last_name}",
+            "applicant_email": app.applicant.email,
+            "applicant_phone": app.applicant.phone,
+            "job_title": app.job.title,
+            "status": app.status,
+            "score": str(app.score) if app.score is not None else "",
+            "rejection_reason": app.rejection_reason,
+            "notes": app.notes,
+            "created_at": app.created_at,
+            "updated_at": app.updated_at,
+        })
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if export_format == "xlsx":
+        return build_excel_response(
+            rows=rows,
+            columns=columns,
+            filename=f"applications_{timestamp}.xlsx",
+            sheet_name="Applications",
+        )
+    return build_csv_response(
+        rows=rows,
+        columns=columns,
+        filename=f"applications_{timestamp}.csv",
+    )
 
 
 @extend_schema_view(
@@ -96,7 +183,6 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
             "change_status": require_permission("smarthrin.applications.edit"),
             "trigger_ai_call": require_permission("smarthrin.calls.create"),
             "destroy": require_permission("smarthrin.applications.delete"),
-            "export": require_permission("smarthrin.applications.view"),
         }
 
         if self.action == "bulk_action":
@@ -175,77 +261,6 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
     # ------------------------------------------------------------------
     # Extra actions
     # ------------------------------------------------------------------
-
-    @extend_schema(
-        tags=["Applications"],
-        summary="Export applications",
-        description=(
-            "Export filtered applications as CSV or Excel. "
-            "Supports the same query params as the list endpoint (status, job_id, applicant_id, etc.). "
-            "Use `export_format=xlsx` for Excel or `export_format=csv` (default) for CSV."
-        ),
-        parameters=[
-            OpenApiParameter("export_format", OpenApiTypes.STR, enum=["csv", "xlsx"], description="Export format (default: csv)"),
-            OpenApiParameter("status", OpenApiTypes.STR, description="Filter by status"),
-            OpenApiParameter("job_id", OpenApiTypes.UUID, description="Filter by job ID"),
-            OpenApiParameter("applicant_id", OpenApiTypes.UUID, description="Filter by applicant ID"),
-            OpenApiParameter("score_gte", OpenApiTypes.NUMBER, description="Minimum score"),
-            OpenApiParameter("score_lte", OpenApiTypes.NUMBER, description="Maximum score"),
-            OpenApiParameter("created_at_gte", OpenApiTypes.DATE, description="Created after date"),
-            OpenApiParameter("created_at_lte", OpenApiTypes.DATE, description="Created before date"),
-        ],
-        responses={200: None},
-    )
-    @action(detail=False, methods=["get"], url_path="export", url_name="export")
-    def export(self, request):
-        """Export filtered applications to CSV or Excel."""
-        from common.export import build_csv_response, build_excel_response
-
-        qs = self.filter_queryset(self.get_queryset()).select_related("applicant", "job")
-        export_format = request.query_params.get("export_format", "csv").lower()
-
-        columns = [
-            ("applicant_name", "Applicant Name"),
-            ("applicant_email", "Applicant Email"),
-            ("applicant_phone", "Applicant Phone"),
-            ("job_title", "Job Title"),
-            ("status", "Status"),
-            ("score", "Score"),
-            ("rejection_reason", "Rejection Reason"),
-            ("notes", "Notes"),
-            ("created_at", "Applied At"),
-            ("updated_at", "Last Updated"),
-        ]
-
-        rows = []
-        for app in qs.iterator():
-            rows.append({
-                "applicant_name": f"{app.applicant.first_name} {app.applicant.last_name}",
-                "applicant_email": app.applicant.email,
-                "applicant_phone": app.applicant.phone,
-                "job_title": app.job.title,
-                "status": app.status,
-                "score": str(app.score) if app.score is not None else "",
-                "rejection_reason": app.rejection_reason,
-                "notes": app.notes,
-                "created_at": app.created_at,
-                "updated_at": app.updated_at,
-            })
-
-        timestamp = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        if export_format == "xlsx":
-            return build_excel_response(
-                rows=rows,
-                columns=columns,
-                filename=f"applications_{timestamp}.xlsx",
-                sheet_name="Applications",
-            )
-        return build_csv_response(
-            rows=rows,
-            columns=columns,
-            filename=f"applications_{timestamp}.csv",
-        )
 
     @extend_schema(
         tags=["Applications"],
