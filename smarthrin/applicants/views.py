@@ -58,7 +58,16 @@ def export_applicants(request: Request):
     from common.export import build_csv_response, build_excel_response
 
     qs = Applicant.objects.filter(tenant_id=request.tenant_id)
+
+    # Honour permission_scope set by HasSmartHRPermission
+    scope = getattr(request, "permission_scope", None)
+    if scope == "own":
+        qs = qs.filter(owner_user_id=request.user_id)
+
     filterset = ApplicantFilterSet(request.query_params, queryset=qs, request=request)
+    if not filterset.is_valid():
+        from rest_framework.exceptions import ValidationError
+        raise ValidationError(filterset.errors)
     qs = filterset.qs
 
     export_format = request.query_params.get("export_format", "csv").lower()
