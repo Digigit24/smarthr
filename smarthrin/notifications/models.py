@@ -35,6 +35,7 @@ class Notification(TenantBaseModel):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["tenant_id", "recipient_user_id", "is_read"]),
+            models.Index(fields=["tenant_id", "recipient_user_id", "-created_at"]),
         ]
 
     def __str__(self) -> str:
