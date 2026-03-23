@@ -9,7 +9,8 @@ from drf_spectacular.utils import (
 )
 from drf_spectacular.types import OpenApiTypes
 from rest_framework import serializers
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, authentication_classes, permission_classes
+from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
@@ -23,6 +24,95 @@ from common.permissions import require_permission
 from .filters import ApplicantFilterSet
 from .models import Applicant
 from .serializers import ApplicantCreateSerializer, ApplicantDetailSerializer, ApplicantListSerializer
+
+
+# ------------------------------------------------------------------
+# Standalone export view (explicit path avoids DefaultRouter issues)
+# ------------------------------------------------------------------
+
+@extend_schema(
+    tags=["Applicants"],
+    summary="Export applicants",
+    description=(
+        "Export filtered applicants as CSV or Excel. "
+        "Supports the same query params as the list endpoint (source, email, skills, etc.). "
+        "Use `export_format=xlsx` for Excel or `export_format=csv` (default) for CSV."
+    ),
+    parameters=[
+        OpenApiParameter("export_format", OpenApiTypes.STR, enum=["csv", "xlsx"], description="Export format (default: csv)"),
+        OpenApiParameter("source", OpenApiTypes.STR, description="Filter by source"),
+        OpenApiParameter("search", OpenApiTypes.STR, description="Search in name/email"),
+        OpenApiParameter("experience_years_gte", OpenApiTypes.NUMBER, description="Min experience years"),
+        OpenApiParameter("experience_years_lte", OpenApiTypes.NUMBER, description="Max experience years"),
+        OpenApiParameter("skills", OpenApiTypes.STR, description="Filter by skill"),
+    ],
+    responses={200: None},
+)
+@api_view(["GET"])
+@authentication_classes([JWTRequestAuthentication])
+@permission_classes([require_permission("smarthrin.applicants.view")])
+def export_applicants(request: Request):
+    """Export filtered applicants to CSV or Excel."""
+    import datetime
+    import json
+    from common.export import build_csv_response, build_excel_response
+
+    qs = Applicant.objects.filter(tenant_id=request.tenant_id)
+    filterset = ApplicantFilterSet(request.query_params, queryset=qs, request=request)
+    qs = filterset.qs
+
+    export_format = request.query_params.get("export_format", "csv").lower()
+
+    columns = [
+        ("first_name", "First Name"),
+        ("last_name", "Last Name"),
+        ("email", "Email"),
+        ("phone", "Phone"),
+        ("source", "Source"),
+        ("experience_years", "Experience (Years)"),
+        ("current_company", "Current Company"),
+        ("current_role", "Current Role"),
+        ("skills", "Skills"),
+        ("tags", "Tags"),
+        ("linkedin_url", "LinkedIn URL"),
+        ("portfolio_url", "Portfolio URL"),
+        ("notes", "Notes"),
+        ("created_at", "Created At"),
+    ]
+
+    rows = []
+    for applicant in qs.iterator():
+        rows.append({
+            "first_name": applicant.first_name,
+            "last_name": applicant.last_name,
+            "email": applicant.email,
+            "phone": applicant.phone,
+            "source": applicant.source,
+            "experience_years": str(applicant.experience_years) if applicant.experience_years is not None else "",
+            "current_company": applicant.current_company,
+            "current_role": applicant.current_role,
+            "skills": ", ".join(applicant.skills or []),
+            "tags": ", ".join(applicant.tags or []),
+            "linkedin_url": applicant.linkedin_url,
+            "portfolio_url": applicant.portfolio_url,
+            "notes": applicant.notes,
+            "created_at": applicant.created_at,
+        })
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if export_format == "xlsx":
+        return build_excel_response(
+            rows=rows,
+            columns=columns,
+            filename=f"applicants_{timestamp}.xlsx",
+            sheet_name="Applicants",
+        )
+    return build_csv_response(
+        rows=rows,
+        columns=columns,
+        filename=f"applicants_{timestamp}.csv",
+    )
 
 
 @extend_schema_view(
@@ -95,7 +185,6 @@ class ApplicantViewSet(TenantViewSetMixin, ModelViewSet):
             "update": require_permission("smarthrin.applicants.edit"),
             "partial_update": require_permission("smarthrin.applicants.edit"),
             "destroy": require_permission("smarthrin.applicants.delete"),
-            "export": require_permission("smarthrin.applicants.view"),
             "applications": require_permission("smarthrin.applications.view"),
         }
         perm_class = action_permission_map.get(
@@ -128,84 +217,6 @@ class ApplicantViewSet(TenantViewSetMixin, ModelViewSet):
             self.request,
             verb=Activity.Verb.UPDATED,
             resource=instance,
-        )
-
-    @extend_schema(
-        tags=["Applicants"],
-        summary="Export applicants",
-        description=(
-            "Export filtered applicants as CSV or Excel. "
-            "Supports the same query params as the list endpoint (source, email, skills, etc.). "
-            "Use `format=xlsx` for Excel or `format=csv` (default) for CSV."
-        ),
-        parameters=[
-            OpenApiParameter("export_format", OpenApiTypes.STR, enum=["csv", "xlsx"], description="Export format (default: csv)"),
-            OpenApiParameter("source", OpenApiTypes.STR, description="Filter by source"),
-            OpenApiParameter("search", OpenApiTypes.STR, description="Search in name/email"),
-            OpenApiParameter("experience_years_gte", OpenApiTypes.NUMBER, description="Min experience years"),
-            OpenApiParameter("experience_years_lte", OpenApiTypes.NUMBER, description="Max experience years"),
-            OpenApiParameter("skills", OpenApiTypes.STR, description="Filter by skill"),
-        ],
-        responses={200: None},
-    )
-    @action(detail=False, methods=["get"], url_path="export", url_name="export")
-    def export(self, request):
-        """Export filtered applicants to CSV or Excel."""
-        import json
-        from common.export import build_csv_response, build_excel_response
-
-        qs = self.filter_queryset(self.get_queryset())
-        export_format = request.query_params.get("export_format", "csv").lower()
-
-        columns = [
-            ("first_name", "First Name"),
-            ("last_name", "Last Name"),
-            ("email", "Email"),
-            ("phone", "Phone"),
-            ("source", "Source"),
-            ("experience_years", "Experience (Years)"),
-            ("current_company", "Current Company"),
-            ("current_role", "Current Role"),
-            ("skills", "Skills"),
-            ("tags", "Tags"),
-            ("linkedin_url", "LinkedIn URL"),
-            ("portfolio_url", "Portfolio URL"),
-            ("notes", "Notes"),
-            ("created_at", "Created At"),
-        ]
-
-        rows = []
-        for applicant in qs.iterator():
-            rows.append({
-                "first_name": applicant.first_name,
-                "last_name": applicant.last_name,
-                "email": applicant.email,
-                "phone": applicant.phone,
-                "source": applicant.source,
-                "experience_years": str(applicant.experience_years) if applicant.experience_years is not None else "",
-                "current_company": applicant.current_company,
-                "current_role": applicant.current_role,
-                "skills": ", ".join(applicant.skills or []),
-                "tags": ", ".join(applicant.tags or []),
-                "linkedin_url": applicant.linkedin_url,
-                "portfolio_url": applicant.portfolio_url,
-                "notes": applicant.notes,
-                "created_at": applicant.created_at,
-            })
-
-        timestamp = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        if export_format == "xlsx":
-            return build_excel_response(
-                rows=rows,
-                columns=columns,
-                filename=f"applicants_{timestamp}.xlsx",
-                sheet_name="Applicants",
-            )
-        return build_csv_response(
-            rows=rows,
-            columns=columns,
-            filename=f"applicants_{timestamp}.csv",
         )
 
     @extend_schema(
