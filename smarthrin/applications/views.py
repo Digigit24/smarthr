@@ -99,15 +99,17 @@ def export_applications(request: Request):
 
     rows = []
     for app in qs.iterator():
+        applicant = app.applicant
+        job = app.job
         rows.append({
-            "applicant_name": f"{app.applicant.first_name} {app.applicant.last_name}",
-            "applicant_email": app.applicant.email,
-            "applicant_phone": app.applicant.phone,
-            "job_title": app.job.title,
+            "applicant_name": f"{applicant.first_name} {applicant.last_name}" if applicant else "",
+            "applicant_email": applicant.email if applicant else "",
+            "applicant_phone": applicant.phone if applicant else "",
+            "job_title": job.title if job else "",
             "status": app.status,
             "score": str(app.score) if app.score is not None else "",
-            "rejection_reason": app.rejection_reason,
-            "notes": app.notes,
+            "rejection_reason": app.rejection_reason or "",
+            "notes": app.notes or "",
             "created_at": app.created_at,
             "updated_at": app.updated_at,
         })
