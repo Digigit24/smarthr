@@ -141,12 +141,6 @@ def create_event(
             "dateTime": end_time.isoformat(),
             "timeZone": "UTC",
         },
-        "conferenceData": {
-            "createRequest": {
-                "requestId": f"smarthr-{uuid.uuid4().hex[:12]}",
-                "conferenceSolutionKey": {"type": "hangoutsMeet"},
-            }
-        },
         "reminders": {
             "useDefault": False,
             "overrides": [
@@ -156,21 +150,24 @@ def create_event(
         },
     }
 
-    # Only add attendees if we have domain-wide delegation (Workspace)
+    # Google Meet + attendees only work with domain-wide delegation (Workspace)
+    insert_kwargs = {
+        "calendarId": "primary",
+        "body": event_body,
+    }
     if has_delegation:
         event_body["attendees"] = [{"email": email} for email in all_emails]
+        event_body["conferenceData"] = {
+            "createRequest": {
+                "requestId": f"smarthr-{uuid.uuid4().hex[:12]}",
+                "conferenceSolutionKey": {"type": "hangoutsMeet"},
+            }
+        }
+        insert_kwargs["conferenceDataVersion"] = 1
+        insert_kwargs["sendUpdates"] = "all"
 
     try:
-        event = (
-            service.events()
-            .insert(
-                calendarId="primary",
-                body=event_body,
-                conferenceDataVersion=1,
-                sendUpdates="all" if has_delegation else "none",
-            )
-            .execute()
-        )
+        event = service.events().insert(**insert_kwargs).execute()
     except Exception as exc:
         raise CalendarAPIError(f"Failed to create calendar event: {exc}") from exc
 
