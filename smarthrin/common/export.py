@@ -40,8 +40,13 @@ def build_excel_response(
     """
     Build an Excel (.xlsx) HttpResponse using openpyxl.
     """
-    import openpyxl
-    from openpyxl.styles import Font, PatternFill, Alignment
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+    except ImportError as exc:
+        raise ImportError(
+            "openpyxl is required for Excel export. Install it with: pip install openpyxl"
+        ) from exc
 
     wb = openpyxl.Workbook()
     ws = wb.active
