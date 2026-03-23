@@ -105,9 +105,14 @@ class InlineInterviewSerializer(serializers.Serializer):
     interviewer_email = serializers.EmailField()
     status = serializers.CharField()
     meeting_link = serializers.CharField()
+    calendar_event_id = serializers.CharField()
+    calendar_synced = serializers.SerializerMethodField()
     feedback = serializers.CharField()
     rating = serializers.IntegerField(allow_null=True)
     created_at = serializers.DateTimeField()
+
+    def get_calendar_synced(self, obj) -> bool:
+        return bool(obj.calendar_event_id)
 
 
 class ApplicationDetailSerializer(serializers.ModelSerializer):
