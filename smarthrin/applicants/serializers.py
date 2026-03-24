@@ -47,6 +47,38 @@ class ApplicantCreateSerializer(serializers.ModelSerializer):
         return value
 
 
+class ApplicantImportSerializer(serializers.ModelSerializer):
+    """
+    Write serializer for bulk import – every field is optional.
+
+    Manual-entry validation (required first_name, last_name, email) stays
+    in ApplicantCreateSerializer and is NOT affected by this serializer.
+    """
+    first_name = serializers.CharField(max_length=255, required=False, default="")
+    last_name = serializers.CharField(max_length=255, required=False, default="")
+    email = serializers.EmailField(required=False, default="")
+    phone = serializers.CharField(max_length=20, required=False, default="")
+    resume_url = serializers.URLField(required=False, default="")
+    linkedin_url = serializers.URLField(required=False, default="")
+    portfolio_url = serializers.URLField(required=False, default="")
+    skills = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    experience_years = serializers.IntegerField(required=False, allow_null=True, default=None)
+    current_company = serializers.CharField(max_length=255, required=False, default="")
+    current_role = serializers.CharField(max_length=255, required=False, default="")
+    notes = serializers.CharField(required=False, default="")
+    source = serializers.ChoiceField(choices=Applicant.Source.choices, required=False, default=Applicant.Source.IMPORT)
+    tags = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+
+    class Meta:
+        model = Applicant
+        fields = [
+            "first_name", "last_name", "email", "phone",
+            "resume_url", "linkedin_url", "portfolio_url",
+            "skills", "experience_years", "current_company", "current_role",
+            "notes", "source", "tags",
+        ]
+
+
 class ApplicantDetailSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
 

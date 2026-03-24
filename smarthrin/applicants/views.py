@@ -15,7 +15,7 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from activities.models import Activity
-from activities.services import log_activity_for_request
+from activities.services import log_activity, log_activity_for_request
 from common.authentication import JWTRequestAuthentication
 from common.mixins import TenantViewSetMixin
 from common.pagination import StandardResultsPagination
@@ -23,7 +23,12 @@ from common.permissions import require_permission
 
 from .filters import ApplicantFilterSet
 from .models import Applicant
-from .serializers import ApplicantCreateSerializer, ApplicantDetailSerializer, ApplicantListSerializer
+from .serializers import (
+    ApplicantCreateSerializer,
+    ApplicantDetailSerializer,
+    ApplicantImportSerializer,
+    ApplicantListSerializer,
+)
 
 
 # ------------------------------------------------------------------
@@ -122,6 +127,307 @@ def export_applicants(request: Request):
         columns=columns,
         filename=f"applicants_{timestamp}.csv",
     )
+
+
+# ------------------------------------------------------------------
+# Standalone import view
+# ------------------------------------------------------------------
+
+# All Applicant model fields that can be mapped from an Excel column.
+IMPORTABLE_FIELDS: dict[str, str] = {
+    "first_name": "First Name",
+    "last_name": "Last Name",
+    "email": "Email",
+    "phone": "Phone",
+    "resume_url": "Resume URL",
+    "linkedin_url": "LinkedIn URL",
+    "portfolio_url": "Portfolio URL",
+    "skills": "Skills",
+    "experience_years": "Experience (Years)",
+    "current_company": "Current Company",
+    "current_role": "Current Role",
+    "notes": "Notes",
+    "source": "Source",
+    "tags": "Tags",
+}
+
+
+@extend_schema(
+    tags=["Applicants"],
+    summary="Get importable fields",
+    description=(
+        "Returns the list of applicant database fields that can be mapped "
+        "to Excel columns during import."
+    ),
+    responses={200: inline_serializer("ImportableFields", fields={
+        "fields": serializers.DictField(child=serializers.CharField()),
+    })},
+)
+@api_view(["GET"])
+@authentication_classes([JWTRequestAuthentication])
+@permission_classes([require_permission("smarthrin.applicants.create")])
+def import_fields(request: Request):
+    """Return the list of importable fields for the frontend mapping UI."""
+    return Response({"fields": IMPORTABLE_FIELDS})
+
+
+@extend_schema(
+    tags=["Applicants"],
+    summary="Preview Excel columns",
+    description=(
+        "Upload an Excel file (.xlsx) and receive its column headers "
+        "so the frontend can build a mapping UI."
+    ),
+    request={
+        "multipart/form-data": inline_serializer("ImportPreviewRequest", fields={
+            "file": serializers.FileField(),
+        }),
+    },
+    responses={
+        200: inline_serializer("ImportPreviewResponse", fields={
+            "columns": serializers.ListField(child=serializers.CharField()),
+            "sample_data": serializers.ListField(child=serializers.DictField()),
+        }),
+    },
+)
+@api_view(["POST"])
+@authentication_classes([JWTRequestAuthentication])
+@permission_classes([require_permission("smarthrin.applicants.create")])
+def import_preview(request: Request):
+    """
+    Accept an Excel file, return its column names and first 5 rows
+    so the frontend can present a mapping UI.
+    """
+    import openpyxl
+
+    uploaded_file = request.FILES.get("file")
+    if not uploaded_file:
+        return Response({"detail": "No file uploaded."}, status=400)
+
+    if not uploaded_file.name.endswith((".xlsx", ".xls")):
+        return Response({"detail": "Only .xlsx files are supported."}, status=400)
+
+    try:
+        wb = openpyxl.load_workbook(uploaded_file, read_only=True, data_only=True)
+    except Exception:
+        return Response({"detail": "Unable to read the uploaded file. Ensure it is a valid .xlsx file."}, status=400)
+
+    ws = wb.active
+    rows_iter = ws.iter_rows(values_only=True)
+
+    try:
+        header_row = next(rows_iter)
+    except StopIteration:
+        wb.close()
+        return Response({"detail": "The uploaded file has no data."}, status=400)
+
+    columns = [str(c).strip() if c is not None else f"Column {i+1}" for i, c in enumerate(header_row)]
+
+    sample_data = []
+    for _, row in zip(range(5), rows_iter):
+        sample_data.append({
+            columns[i]: (str(cell).strip() if cell is not None else "")
+            for i, cell in enumerate(row)
+            if i < len(columns)
+        })
+
+    wb.close()
+    return Response({"columns": columns, "sample_data": sample_data})
+
+
+@extend_schema(
+    tags=["Applicants"],
+    summary="Import applicants from Excel",
+    description=(
+        "Upload an Excel file and a field mapping to bulk-create applicants. "
+        "No fields are required during import – only mapped columns are populated. "
+        "Rows with duplicate emails (per tenant) are skipped. "
+        "The response includes counts and per-row error details."
+    ),
+    request={
+        "multipart/form-data": inline_serializer("ImportApplicantsRequest", fields={
+            "file": serializers.FileField(help_text="The .xlsx file to import."),
+            "mapping": serializers.CharField(
+                help_text='JSON string mapping Excel column names to DB fields. '
+                           'Example: {"Full Name": "first_name", "E-mail": "email"}',
+            ),
+        }),
+    },
+    responses={
+        200: inline_serializer("ImportApplicantsResponse", fields={
+            "total_rows": serializers.IntegerField(),
+            "imported": serializers.IntegerField(),
+            "skipped": serializers.IntegerField(),
+            "errors": serializers.ListField(child=serializers.DictField()),
+        }),
+    },
+)
+@api_view(["POST"])
+@authentication_classes([JWTRequestAuthentication])
+@permission_classes([require_permission("smarthrin.applicants.create")])
+def import_applicants(request: Request):
+    """
+    Bulk-import applicants from an uploaded Excel file.
+
+    Expected multipart/form-data payload:
+        file    – .xlsx file
+        mapping – JSON string, e.g. {"Excel Col": "db_field", ...}
+    """
+    import json
+    import openpyxl
+
+    # ---- validate file -------------------------------------------------
+    uploaded_file = request.FILES.get("file")
+    if not uploaded_file:
+        return Response({"detail": "No file uploaded."}, status=400)
+
+    if not uploaded_file.name.endswith((".xlsx", ".xls")):
+        return Response({"detail": "Only .xlsx files are supported."}, status=400)
+
+    # ---- validate mapping ----------------------------------------------
+    raw_mapping = request.data.get("mapping")
+    if not raw_mapping:
+        return Response({"detail": "Field mapping is required."}, status=400)
+
+    try:
+        mapping: dict = json.loads(raw_mapping) if isinstance(raw_mapping, str) else raw_mapping
+    except (json.JSONDecodeError, TypeError):
+        return Response({"detail": "Invalid mapping JSON."}, status=400)
+
+    # Ensure every target field is a real importable field
+    invalid_fields = [v for v in mapping.values() if v not in IMPORTABLE_FIELDS]
+    if invalid_fields:
+        return Response(
+            {"detail": f"Invalid target fields: {', '.join(invalid_fields)}"},
+            status=400,
+        )
+
+    # ---- read workbook --------------------------------------------------
+    try:
+        wb = openpyxl.load_workbook(uploaded_file, read_only=True, data_only=True)
+    except Exception:
+        return Response({"detail": "Unable to read the uploaded file."}, status=400)
+
+    ws = wb.active
+    rows_iter = ws.iter_rows(values_only=True)
+
+    try:
+        header_row = next(rows_iter)
+    except StopIteration:
+        wb.close()
+        return Response({"detail": "The uploaded file has no data."}, status=400)
+
+    columns = [str(c).strip() if c is not None else "" for c in header_row]
+
+    # Build col-index → db_field lookup from the mapping
+    col_to_field: dict[int, str] = {}
+    for excel_col, db_field in mapping.items():
+        try:
+            idx = columns.index(excel_col)
+            col_to_field[idx] = db_field
+        except ValueError:
+            wb.close()
+            return Response(
+                {"detail": f"Mapped Excel column '{excel_col}' not found in file headers."},
+                status=400,
+            )
+
+    # ---- pre-fetch existing emails for this tenant (for skip logic) -----
+    existing_emails: set[str] = set(
+        Applicant.objects.filter(tenant_id=request.tenant_id)
+        .values_list("email", flat=True)
+    )
+
+    # ---- iterate rows and build applicant dicts -------------------------
+    imported = 0
+    skipped = 0
+    errors: list[dict] = []
+    batch: list[dict] = []
+
+    for row_num, row in enumerate(rows_iter, start=2):
+        row_data: dict = {}
+        for col_idx, db_field in col_to_field.items():
+            cell_value = row[col_idx] if col_idx < len(row) else None
+            if cell_value is None:
+                continue
+
+            cell_str = str(cell_value).strip()
+            if not cell_str:
+                continue
+
+            # Convert comma-separated strings to lists for JSON fields
+            if db_field in ("skills", "tags"):
+                row_data[db_field] = [s.strip() for s in cell_str.split(",") if s.strip()]
+            elif db_field == "experience_years":
+                try:
+                    row_data[db_field] = int(float(cell_str))
+                except (ValueError, TypeError):
+                    pass  # skip non-numeric, field stays empty
+            else:
+                row_data[db_field] = cell_str
+
+        # Skip completely empty rows
+        if not row_data:
+            continue
+
+        # Force source to IMPORT unless the user explicitly mapped a source column
+        if "source" not in col_to_field.values():
+            row_data["source"] = "IMPORT"
+
+        # Duplicate email check (skip row, don't error)
+        email = row_data.get("email", "").lower()
+        if email and email in existing_emails:
+            skipped += 1
+            continue
+
+        # Validate through serializer (no required fields)
+        ser = ApplicantImportSerializer(data=row_data, context={"request": request})
+        if not ser.is_valid():
+            errors.append({"row": row_num, "errors": ser.errors})
+            continue
+
+        batch.append(ser.validated_data)
+
+        # Track the email so later rows in the same file won't duplicate it
+        if email:
+            existing_emails.add(email)
+
+    wb.close()
+
+    # ---- bulk create ----------------------------------------------------
+    applicants_to_create = [
+        Applicant(
+            tenant_id=request.tenant_id,
+            owner_user_id=request.user_id,
+            **data,
+        )
+        for data in batch
+    ]
+
+    if applicants_to_create:
+        Applicant.objects.bulk_create(applicants_to_create, ignore_conflicts=True)
+        imported = len(applicants_to_create)
+
+        # Log a single activity for the whole import
+        log_activity(
+            tenant_id=str(request.tenant_id),
+            actor_user_id=str(request.user_id),
+            actor_email=getattr(request, "email", ""),
+            verb=Activity.Verb.CREATED,
+            resource_type="Applicant",
+            resource_id="bulk_import",
+            resource_label=f"Bulk import of {imported} applicants",
+            after={"action": "bulk_import", "count": imported},
+        )
+
+    total_rows = imported + skipped + len(errors)
+
+    return Response({
+        "total_rows": total_rows,
+        "imported": imported,
+        "skipped": skipped,
+        "errors": errors,
+    })
 
 
 @extend_schema_view(
