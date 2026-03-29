@@ -49,13 +49,20 @@ class InlineApplicantSerializer(serializers.Serializer):
     id = serializers.UUIDField()
     first_name = serializers.CharField()
     last_name = serializers.CharField()
+    full_name = serializers.SerializerMethodField()
     email = serializers.EmailField()
     phone = serializers.CharField()
+    resume_url = serializers.CharField()
+    linkedin_url = serializers.CharField()
+    portfolio_url = serializers.CharField()
     skills = serializers.JSONField()
     experience_years = serializers.IntegerField(allow_null=True)
     current_role = serializers.CharField()
     current_company = serializers.CharField()
     source = serializers.CharField()
+
+    def get_full_name(self, obj):
+        return f"{obj.first_name} {obj.last_name}"
 
 
 class InlineJobSerializer(serializers.Serializer):
@@ -91,6 +98,7 @@ class InlineScorecardSerializer(serializers.Serializer):
     overall_score = serializers.DecimalField(max_digits=4, decimal_places=2)
     recommendation = serializers.CharField()
     summary = serializers.CharField()
+    detailed_feedback = serializers.CharField()
     strengths = serializers.JSONField()
     weaknesses = serializers.JSONField()
     created_at = serializers.DateTimeField()

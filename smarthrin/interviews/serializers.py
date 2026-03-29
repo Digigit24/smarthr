@@ -10,12 +10,16 @@ class InterviewListSerializer(serializers.ModelSerializer):
     applicant_name = serializers.SerializerMethodField()
     applicant_email = serializers.SerializerMethodField()
     calendar_synced = serializers.SerializerMethodField()
+    job_id = serializers.SerializerMethodField()
+    job_title = serializers.SerializerMethodField()
 
     class Meta:
         model = Interview
         fields = [
             "id",
             "application_id",
+            "job_id",
+            "job_title",
             "interview_type",
             "scheduled_at",
             "duration_minutes",
@@ -46,6 +50,18 @@ class InterviewListSerializer(serializers.ModelSerializer):
         except AttributeError:
             return ""
 
+    def get_job_id(self, obj):
+        try:
+            return str(obj.application.job_id)
+        except AttributeError:
+            return None
+
+    def get_job_title(self, obj):
+        try:
+            return obj.application.job.title
+        except AttributeError:
+            return None
+
 
 class InterviewDetailSerializer(serializers.ModelSerializer):
     """Full serializer for Interview detail views and create/update."""
@@ -53,6 +69,8 @@ class InterviewDetailSerializer(serializers.ModelSerializer):
     applicant_name = serializers.SerializerMethodField()
     applicant_email = serializers.SerializerMethodField()
     calendar_synced = serializers.SerializerMethodField()
+    job_id = serializers.SerializerMethodField()
+    job_title = serializers.SerializerMethodField()
 
     class Meta:
         model = Interview
@@ -61,6 +79,8 @@ class InterviewDetailSerializer(serializers.ModelSerializer):
             "tenant_id",
             "owner_user_id",
             "application_id",
+            "job_id",
+            "job_title",
             "interview_type",
             "scheduled_at",
             "duration_minutes",
@@ -94,6 +114,18 @@ class InterviewDetailSerializer(serializers.ModelSerializer):
             return obj.application.applicant.email
         except AttributeError:
             return ""
+
+    def get_job_id(self, obj):
+        try:
+            return str(obj.application.job_id)
+        except AttributeError:
+            return None
+
+    def get_job_title(self, obj):
+        try:
+            return obj.application.job.title
+        except AttributeError:
+            return None
 
 
 class InterviewCreateSerializer(serializers.ModelSerializer):

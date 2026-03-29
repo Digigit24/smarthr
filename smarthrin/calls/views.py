@@ -147,7 +147,7 @@ def export_scorecards(request: Request):
 class CallRecordViewSet(TenantViewSetMixin, ReadOnlyModelViewSet):
     """Read-only viewset for CallRecord — list + retrieve + transcript + retry actions."""
 
-    queryset = CallRecord.objects.select_related("application").prefetch_related("scorecard", "queue_items__queue").all()
+    queryset = CallRecord.objects.select_related("application__applicant", "application__job").prefetch_related("scorecard", "queue_items__queue").all()
     authentication_classes = [JWTRequestAuthentication]
     pagination_class = StandardResultsPagination
     filterset_class = CallRecordFilterSet

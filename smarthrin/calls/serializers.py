@@ -86,6 +86,9 @@ class CallRecordDetailSerializer(serializers.ModelSerializer):
 
     scorecard = serializers.SerializerMethodField()
     queue_item = serializers.SerializerMethodField()
+    applicant_name = serializers.SerializerMethodField()
+    applicant_email = serializers.SerializerMethodField()
+    job_title = serializers.SerializerMethodField()
 
     class Meta:
         model = CallRecord
@@ -94,6 +97,9 @@ class CallRecordDetailSerializer(serializers.ModelSerializer):
             "tenant_id",
             "owner_user_id",
             "application_id",
+            "applicant_name",
+            "applicant_email",
+            "job_title",
             "provider",
             "voice_agent_id",
             "provider_call_id",
@@ -119,6 +125,24 @@ class CallRecordDetailSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+    def get_applicant_name(self, obj):
+        try:
+            return obj.application.applicant.full_name
+        except AttributeError:
+            return None
+
+    def get_applicant_email(self, obj):
+        try:
+            return obj.application.applicant.email
+        except AttributeError:
+            return None
+
+    def get_job_title(self, obj):
+        try:
+            return obj.application.job.title
+        except AttributeError:
+            return None
 
     def get_scorecard(self, call_record: CallRecord):
         scorecard = call_record.scorecard.first()
