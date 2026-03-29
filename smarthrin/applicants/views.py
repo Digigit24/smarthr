@@ -485,7 +485,7 @@ def import_applicants(request: Request):
 class ApplicantViewSet(TenantViewSetMixin, ModelViewSet):
     """CRUD + extra actions for Applicant."""
 
-    queryset = Applicant.objects.all()
+    queryset = Applicant.objects.prefetch_related("applications__job")
     authentication_classes = [JWTRequestAuthentication]
     pagination_class = StandardResultsPagination
     filterset_class = ApplicantFilterSet

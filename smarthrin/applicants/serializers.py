@@ -3,6 +3,19 @@ from rest_framework import serializers
 from .models import Applicant
 
 
+class ApplicantApplicationSerializer(serializers.Serializer):
+    """Inline application summary nested inside ApplicantDetailSerializer."""
+    id = serializers.UUIDField()
+    job_id = serializers.UUIDField()
+    job_title = serializers.SerializerMethodField()
+    status = serializers.CharField()
+    score = serializers.DecimalField(max_digits=5, decimal_places=2, allow_null=True)
+    created_at = serializers.DateTimeField()
+
+    def get_job_title(self, obj):
+        return obj.job.title if obj.job_id else None
+
+
 class ApplicantListSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
 
@@ -83,6 +96,7 @@ class ApplicantImportSerializer(serializers.ModelSerializer):
 
 class ApplicantDetailSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
+    applications = ApplicantApplicationSerializer(many=True, read_only=True)
 
     class Meta:
         model = Applicant
@@ -91,7 +105,7 @@ class ApplicantDetailSerializer(serializers.ModelSerializer):
             "first_name", "last_name", "full_name", "email", "phone",
             "resume_url", "linkedin_url", "portfolio_url",
             "skills", "experience_years", "current_company", "current_role",
-            "notes", "source", "tags", "created_at", "updated_at",
+            "notes", "source", "tags", "applications", "created_at", "updated_at",
         ]
         read_only_fields = ["id", "tenant_id", "owner_user_id", "created_at", "updated_at"]
 
