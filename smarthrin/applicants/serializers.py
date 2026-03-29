@@ -24,11 +24,13 @@ class ApplicantCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Applicant
         fields = [
+            "id",
             "first_name", "last_name", "email", "phone",
             "resume_url", "linkedin_url", "portfolio_url",
             "skills", "experience_years", "current_company", "current_role",
             "notes", "source", "tags",
         ]
+        read_only_fields = ["id"]
 
     def validate_email(self, value):
         request = self.context.get("request")
