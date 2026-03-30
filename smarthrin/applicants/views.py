@@ -1,4 +1,6 @@
 """Views for Applicant resource."""
+import re
+
 from drf_spectacular.utils import (
     OpenApiExample,
     OpenApiParameter,
@@ -281,21 +283,25 @@ _FIELD_ALIASES: dict[str, str] = {
 }
 
 
-def _suggest_mapping(excel_columns: list[str]) -> dict[str, str]:
+def _suggest_mapping(
+    excel_columns: list[str],
+    sample_data: list[dict] | None = None,
+) -> dict[str, str]:
     """
     Return a best-effort mapping from Excel column names to DB field names.
 
-    Uses exact alias matching (case-insensitive). Each DB field is mapped at
-    most once (first match wins) to avoid ambiguous duplicates.
+    Two-pass strategy:
+      1. **Header matching** – exact alias lookup (case-insensitive).
+      2. **Data inference** – for unmatched columns, inspect sample cell values
+         to guess the field type (e.g. values that look like email addresses
+         → email, URLs → resume_url/linkedin_url/portfolio_url, etc.).
 
-    Special rule: if both first_name and last_name are matched, full_name is
-    excluded to avoid conflicts. Conversely, if only full_name matches, the
-    separate first/last name columns won't be suggested.
+    Each DB field is mapped at most once (first match wins).
     """
     suggested: dict[str, str] = {}
     used_fields: set[str] = set()
 
-    # First pass: match all columns
+    # ---- Pass 1: header-name aliases ------------------------------------
     for col in excel_columns:
         normalised = col.strip().lower()
         if not normalised:
@@ -308,8 +314,90 @@ def _suggest_mapping(excel_columns: list[str]) -> dict[str, str]:
     # Resolve conflict: if first_name or last_name matched, drop full_name
     if ("first_name" in used_fields or "last_name" in used_fields) and "full_name" in used_fields:
         suggested = {k: v for k, v in suggested.items() if v != "full_name"}
+        used_fields.discard("full_name")
+
+    # ---- Pass 2: data-driven inference for remaining columns ------------
+    if sample_data:
+        for col in excel_columns:
+            if col in suggested:
+                continue
+
+            # Gather non-empty sample values for this column
+            values = [
+                str(row.get(col, "")).strip()
+                for row in sample_data
+                if str(row.get(col, "")).strip()
+            ]
+            if not values:
+                continue
+
+            inferred = _infer_field_from_values(values, used_fields)
+            if inferred:
+                suggested[col] = inferred
+                used_fields.add(inferred)
 
     return suggested
+
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_PHONE_RE = re.compile(r"^[\d\s\-\+\(\)\.]{7,20}$")
+_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
+_LINKEDIN_RE = re.compile(r"linkedin\.com", re.IGNORECASE)
+_NUMBER_RE = re.compile(r"^\d{1,2}(\.\d+)?$")
+
+
+def _infer_field_from_values(values: list[str], used_fields: set[str]) -> str | None:
+    """
+    Inspect a list of sample cell values and return the most likely DB field,
+    or None if no confident guess can be made.
+
+    A pattern must match the *majority* of non-empty sample values to be
+    considered a confident match.
+    """
+    total = len(values)
+    if total == 0:
+        return None
+
+    def majority(matches: int) -> bool:
+        return matches > total / 2
+
+    # Email pattern
+    email_hits = sum(1 for v in values if _EMAIL_RE.match(v))
+    if majority(email_hits) and "email" not in used_fields:
+        return "email"
+
+    # URL patterns (check linkedin first, then generic URL)
+    url_hits = sum(1 for v in values if _URL_RE.match(v))
+    if majority(url_hits):
+        linkedin_hits = sum(1 for v in values if _LINKEDIN_RE.search(v))
+        if majority(linkedin_hits) and "linkedin_url" not in used_fields:
+            return "linkedin_url"
+        if "resume_url" not in used_fields:
+            return "resume_url"
+        if "portfolio_url" not in used_fields:
+            return "portfolio_url"
+        if "linkedin_url" not in used_fields:
+            return "linkedin_url"
+
+    # Phone pattern
+    phone_hits = sum(1 for v in values if _PHONE_RE.match(v))
+    if majority(phone_hits) and "phone" not in used_fields:
+        return "phone"
+
+    # Small integer → experience_years (1-50 range)
+    num_hits = sum(1 for v in values if _NUMBER_RE.match(v) and 0 <= float(v) <= 50)
+    if majority(num_hits) and "experience_years" not in used_fields:
+        return "experience_years"
+
+    # Comma-separated lists → skills or tags
+    csv_hits = sum(1 for v in values if "," in v and len(v.split(",")) >= 2)
+    if majority(csv_hits):
+        if "skills" not in used_fields:
+            return "skills"
+        if "tags" not in used_fields:
+            return "tags"
+
+    return None
 
 
 @extend_schema(
@@ -396,7 +484,7 @@ def import_preview(request: Request):
     return Response({
         "columns": columns,
         "sample_data": sample_data,
-        "suggested_mapping": _suggest_mapping(columns),
+        "suggested_mapping": _suggest_mapping(columns, sample_data),
     })
 
 
