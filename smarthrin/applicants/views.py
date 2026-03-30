@@ -134,9 +134,12 @@ def export_applicants(request: Request):
 # ------------------------------------------------------------------
 
 # All Applicant model fields that can be mapped from an Excel column.
+# Virtual composite fields (prefixed with explanation) are also accepted;
+# they are expanded into real DB fields during row processing.
 IMPORTABLE_FIELDS: dict[str, str] = {
     "first_name": "First Name",
     "last_name": "Last Name",
+    "full_name": "Full Name (splits into First + Last Name)",
     "email": "Email",
     "phone": "Phone",
     "resume_url": "Resume URL",
@@ -154,6 +157,15 @@ IMPORTABLE_FIELDS: dict[str, str] = {
 # Aliases for fuzzy auto-mapping of Excel column headers to DB fields.
 # Keys are lowercase; values are the corresponding IMPORTABLE_FIELDS key.
 _FIELD_ALIASES: dict[str, str] = {
+    # full_name (virtual – split into first_name + last_name)
+    "full name": "full_name",
+    "full_name": "full_name",
+    "fullname": "full_name",
+    "name": "full_name",
+    "candidate name": "full_name",
+    "candidate": "full_name",
+    "applicant name": "full_name",
+    "applicant": "full_name",
     # first_name
     "first name": "first_name",
     "first_name": "first_name",
@@ -275,10 +287,15 @@ def _suggest_mapping(excel_columns: list[str]) -> dict[str, str]:
 
     Uses exact alias matching (case-insensitive). Each DB field is mapped at
     most once (first match wins) to avoid ambiguous duplicates.
+
+    Special rule: if both first_name and last_name are matched, full_name is
+    excluded to avoid conflicts. Conversely, if only full_name matches, the
+    separate first/last name columns won't be suggested.
     """
     suggested: dict[str, str] = {}
     used_fields: set[str] = set()
 
+    # First pass: match all columns
     for col in excel_columns:
         normalised = col.strip().lower()
         if not normalised:
@@ -287,6 +304,10 @@ def _suggest_mapping(excel_columns: list[str]) -> dict[str, str]:
         if db_field and db_field not in used_fields:
             suggested[col] = db_field
             used_fields.add(db_field)
+
+    # Resolve conflict: if first_name or last_name matched, drop full_name
+    if ("first_name" in used_fields or "last_name" in used_fields) and "full_name" in used_fields:
+        suggested = {k: v for k, v in suggested.items() if v != "full_name"}
 
     return suggested
 
@@ -508,6 +529,11 @@ def import_applicants(request: Request):
                     row_data[db_field] = int(float(cell_str))
                 except (ValueError, TypeError):
                     pass  # skip non-numeric, field stays empty
+            elif db_field == "full_name":
+                # Virtual field: split "Jane Doe" → first_name + last_name
+                parts = cell_str.split(None, 1)
+                row_data["first_name"] = parts[0]
+                row_data["last_name"] = parts[1] if len(parts) > 1 else ""
             else:
                 row_data[db_field] = cell_str
 
