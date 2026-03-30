@@ -274,6 +274,7 @@ def import_applicants(request: Request):
         mapping – JSON string, e.g. {"Excel Col": "db_field", ...}
     """
     import json
+    import uuid
     import openpyxl
 
     # ---- validate file -------------------------------------------------
@@ -415,7 +416,7 @@ def import_applicants(request: Request):
             actor_email=getattr(request, "email", ""),
             verb=Activity.Verb.CREATED,
             resource_type="Applicant",
-            resource_id="bulk_import",
+            resource_id=str(uuid.uuid4()),
             resource_label=f"Bulk import of {imported} applicants",
             after={"action": "bulk_import", "count": imported},
         )
