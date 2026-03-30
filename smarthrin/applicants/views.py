@@ -182,9 +182,7 @@ _FIELD_ALIASES: dict[str, str] = {
     "fullname": "full_name",
     "name": "full_name",
     "candidate name": "full_name",
-    "candidate": "full_name",
     "applicant name": "full_name",
-    "applicant": "full_name",
     # first_name
     "first name": "first_name",
     "first_name": "first_name",
@@ -227,7 +225,6 @@ _FIELD_ALIASES: dict[str, str] = {
     "cell": "phone",
     "cell phone": "phone",
     "contact number": "phone",
-    "contact": "phone",
     # resume_url
     "resume url": "resume_url",
     "resume link": "resume_url",
@@ -479,25 +476,31 @@ def import_preview(request: Request):
         return Response({"detail": "Unable to read the uploaded file. Ensure it is a valid .xlsx file."}, status=400)
 
     ws = wb.active
-    rows_iter = ws.iter_rows(values_only=True)
+    if ws is None:
+        wb.close()
+        return Response({"detail": "The uploaded file has no worksheets."}, status=400)
 
     try:
-        header_row = next(rows_iter)
-    except StopIteration:
+        rows_iter = ws.iter_rows(values_only=True)
+
+        try:
+            header_row = next(rows_iter)
+        except StopIteration:
+            wb.close()
+            return Response({"detail": "The uploaded file has no data."}, status=400)
+
+        columns = [str(c).strip() if c is not None else f"Column {i+1}" for i, c in enumerate(header_row)]
+
+        sample_data = []
+        for _, row in zip(range(5), rows_iter):
+            sample_data.append({
+                columns[i]: (str(cell).strip() if cell is not None else "")
+                for i, cell in enumerate(row)
+                if i < len(columns)
+            })
+    finally:
         wb.close()
-        return Response({"detail": "The uploaded file has no data."}, status=400)
 
-    columns = [str(c).strip() if c is not None else f"Column {i+1}" for i, c in enumerate(header_row)]
-
-    sample_data = []
-    for _, row in zip(range(5), rows_iter):
-        sample_data.append({
-            columns[i]: (str(cell).strip() if cell is not None else "")
-            for i, cell in enumerate(row)
-            if i < len(columns)
-        })
-
-    wb.close()
     return Response({
         "columns": columns,
         "sample_data": sample_data,
@@ -590,116 +593,119 @@ def import_applicants(request: Request):
         return Response({"detail": "Unable to read the uploaded file."}, status=400)
 
     ws = wb.active
-    rows_iter = ws.iter_rows(values_only=True)
+    if ws is None:
+        wb.close()
+        return Response({"detail": "The uploaded file has no worksheets."}, status=400)
 
     try:
-        header_row = next(rows_iter)
-    except StopIteration:
-        wb.close()
-        return Response({"detail": "The uploaded file has no data."}, status=400)
+        rows_iter = ws.iter_rows(values_only=True)
 
-    columns = [str(c).strip() if c is not None else "" for c in header_row]
-
-    # Build col-index → db_field lookup from the mapping
-    col_to_field: dict[int, str] = {}
-    for excel_col, db_field in mapping.items():
         try:
-            idx = columns.index(excel_col)
-            col_to_field[idx] = db_field
-        except ValueError:
-            wb.close()
-            return Response(
-                {"detail": f"Mapped Excel column '{excel_col}' not found in file headers."},
-                status=400,
-            )
+            header_row = next(rows_iter)
+        except StopIteration:
+            return Response({"detail": "The uploaded file has no data."}, status=400)
 
-    # Build col-index → header name lookup for unmapped columns
-    unmapped_cols: dict[int, str] = {}
-    if include_unmapped:
-        mapped_indexes = set(col_to_field.keys())
-        for idx, col_name in enumerate(columns):
-            if idx not in mapped_indexes and col_name:
-                unmapped_cols[idx] = col_name
+        columns = [str(c).strip() if c is not None else "" for c in header_row]
 
-    # ---- pre-fetch existing emails for this tenant (for skip logic) -----
-    existing_emails: set[str] = set(
-        Applicant.objects.filter(tenant_id=request.tenant_id)
-        .values_list("email", flat=True)
-    )
+        # Build col-index → db_field lookup from the mapping
+        col_to_field: dict[int, str] = {}
+        for excel_col, db_field in mapping.items():
+            try:
+                idx = columns.index(excel_col)
+                col_to_field[idx] = db_field
+            except ValueError:
+                return Response(
+                    {"detail": f"Mapped Excel column '{excel_col}' not found in file headers."},
+                    status=400,
+                )
 
-    # ---- iterate rows and build applicant dicts -------------------------
-    imported = 0
-    skipped = 0
-    errors: list[dict] = []
-    batch: list[dict] = []
+        # Build col-index → header name lookup for unmapped columns
+        unmapped_cols: dict[int, str] = {}
+        if include_unmapped:
+            mapped_indexes = set(col_to_field.keys())
+            for idx, col_name in enumerate(columns):
+                if idx not in mapped_indexes and col_name:
+                    unmapped_cols[idx] = col_name
 
-    for row_num, row in enumerate(rows_iter, start=2):
-        row_data: dict = {}
-        for col_idx, db_field in col_to_field.items():
-            cell_value = row[col_idx] if col_idx < len(row) else None
-            if cell_value is None:
-                continue
+        # ---- pre-fetch existing emails for this tenant (for skip logic) -----
+        existing_emails: set[str] = set(
+            email.lower() for email in
+            Applicant.objects.filter(tenant_id=request.tenant_id)
+            .values_list("email", flat=True)
+        )
 
-            cell_str = str(cell_value).strip()
-            if not cell_str:
-                continue
+        # ---- iterate rows and build applicant dicts -------------------------
+        skipped = 0
+        errors: list[dict] = []
+        batch: list[dict] = []
 
-            # Convert comma-separated strings to lists for JSON fields
-            if db_field in ("skills", "tags"):
-                row_data[db_field] = [s.strip() for s in cell_str.split(",") if s.strip()]
-            elif db_field == "experience_years":
-                try:
-                    row_data[db_field] = int(float(cell_str))
-                except (ValueError, TypeError):
-                    pass  # skip non-numeric, field stays empty
-            elif db_field == "full_name":
-                # Virtual field: split "Jane Doe" → first_name + last_name
-                parts = cell_str.split(None, 1)
-                row_data["first_name"] = parts[0]
-                row_data["last_name"] = parts[1] if len(parts) > 1 else ""
-            else:
-                row_data[db_field] = cell_str
-
-        # Collect unmapped columns into custom_fields
-        if unmapped_cols:
-            custom: dict = {}
-            for col_idx, col_name in unmapped_cols.items():
+        for row_num, row in enumerate(rows_iter, start=2):
+            row_data: dict = {}
+            for col_idx, db_field in col_to_field.items():
                 cell_value = row[col_idx] if col_idx < len(row) else None
                 if cell_value is None:
                     continue
+
                 cell_str = str(cell_value).strip()
-                if cell_str:
-                    custom[col_name] = cell_str
-            if custom:
-                row_data["custom_fields"] = custom
+                if not cell_str:
+                    continue
 
-        # Skip completely empty rows
-        if not row_data:
-            continue
+                # Convert comma-separated strings to lists for JSON fields
+                if db_field in ("skills", "tags"):
+                    row_data[db_field] = [s.strip() for s in cell_str.split(",") if s.strip()]
+                elif db_field == "experience_years":
+                    try:
+                        row_data[db_field] = int(float(cell_str))
+                    except (ValueError, TypeError):
+                        pass  # skip non-numeric, field stays empty
+                elif db_field == "full_name":
+                    # Virtual field: split "Jane Doe" → first_name + last_name
+                    parts = cell_str.split(None, 1)
+                    row_data["first_name"] = parts[0]
+                    row_data["last_name"] = parts[1] if len(parts) > 1 else ""
+                else:
+                    row_data[db_field] = cell_str
 
-        # Force source to IMPORT unless the user explicitly mapped a source column
-        if "source" not in col_to_field.values():
-            row_data["source"] = "IMPORT"
+            # Collect unmapped columns into custom_fields
+            if unmapped_cols:
+                custom: dict = {}
+                for col_idx, col_name in unmapped_cols.items():
+                    cell_value = row[col_idx] if col_idx < len(row) else None
+                    if cell_value is None:
+                        continue
+                    cell_str = str(cell_value).strip()
+                    if cell_str:
+                        custom[col_name] = cell_str
+                if custom:
+                    row_data["custom_fields"] = custom
 
-        # Duplicate email check (skip row, don't error)
-        email = row_data.get("email", "").lower()
-        if email and email in existing_emails:
-            skipped += 1
-            continue
+            # Skip completely empty rows
+            if not row_data:
+                continue
 
-        # Validate through serializer (no required fields)
-        ser = ApplicantImportSerializer(data=row_data, context={"request": request})
-        if not ser.is_valid():
-            errors.append({"row": row_num, "errors": ser.errors})
-            continue
+            # Force source to IMPORT unless the user explicitly mapped a source column
+            if "source" not in col_to_field.values():
+                row_data["source"] = "IMPORT"
 
-        batch.append(ser.validated_data)
+            # Duplicate email check (skip row, don't error)
+            email = row_data.get("email", "").lower()
+            if email and email in existing_emails:
+                skipped += 1
+                continue
 
-        # Track the email so later rows in the same file won't duplicate it
-        if email:
-            existing_emails.add(email)
+            # Validate through serializer (no required fields)
+            ser = ApplicantImportSerializer(data=row_data, context={"request": request})
+            if not ser.is_valid():
+                errors.append({"row": row_num, "errors": ser.errors})
+                continue
 
-    wb.close()
+            batch.append(ser.validated_data)
+
+            # Track the email so later rows in the same file won't duplicate it
+            if email:
+                existing_emails.add(email)
+    finally:
+        wb.close()
 
     # ---- bulk create ----------------------------------------------------
     applicants_to_create = [
@@ -712,20 +718,25 @@ def import_applicants(request: Request):
     ]
 
     if applicants_to_create:
+        count_before = Applicant.objects.filter(tenant_id=request.tenant_id).count()
         Applicant.objects.bulk_create(applicants_to_create, ignore_conflicts=True)
-        imported = len(applicants_to_create)
+        count_after = Applicant.objects.filter(tenant_id=request.tenant_id).count()
+        imported = count_after - count_before
 
         # Log a single activity for the whole import
-        log_activity(
-            tenant_id=str(request.tenant_id),
-            actor_user_id=str(request.user_id),
-            actor_email=getattr(request, "email", ""),
-            verb=Activity.Verb.CREATED,
-            resource_type="Applicant",
-            resource_id=str(uuid.uuid4()),
-            resource_label=f"Bulk import of {imported} applicants",
-            after={"action": "bulk_import", "count": imported},
-        )
+        if imported:
+            log_activity(
+                tenant_id=str(request.tenant_id),
+                actor_user_id=str(request.user_id),
+                actor_email=getattr(request, "email", ""),
+                verb=Activity.Verb.CREATED,
+                resource_type="Applicant",
+                resource_id=str(uuid.uuid4()),
+                resource_label=f"Bulk import of {imported} applicants",
+                after={"action": "bulk_import", "count": imported},
+            )
+    else:
+        imported = 0
 
     total_rows = imported + skipped + len(errors)
 
