@@ -24,7 +24,7 @@ class ApplicantListSerializer(serializers.ModelSerializer):
         fields = [
             "id", "first_name", "last_name", "full_name", "email", "phone",
             "source", "skills", "experience_years", "current_role",
-            "current_company", "tags", "created_at",
+            "current_company", "tags", "custom_fields", "created_at",
         ]
         read_only_fields = ["id", "created_at"]
 
@@ -41,7 +41,7 @@ class ApplicantCreateSerializer(serializers.ModelSerializer):
             "first_name", "last_name", "email", "phone",
             "resume_url", "linkedin_url", "portfolio_url",
             "skills", "experience_years", "current_company", "current_role",
-            "notes", "source", "tags",
+            "notes", "source", "tags", "custom_fields",
         ]
         read_only_fields = ["id"]
 
@@ -83,6 +83,7 @@ class ApplicantImportSerializer(serializers.ModelSerializer):
     notes = serializers.CharField(required=False, default="")
     source = serializers.ChoiceField(choices=Applicant.Source.choices, required=False, default=Applicant.Source.IMPORT)
     tags = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    custom_fields = serializers.DictField(required=False, default=dict)
 
     class Meta:
         model = Applicant
@@ -90,7 +91,7 @@ class ApplicantImportSerializer(serializers.ModelSerializer):
             "first_name", "last_name", "email", "phone",
             "resume_url", "linkedin_url", "portfolio_url",
             "skills", "experience_years", "current_company", "current_role",
-            "notes", "source", "tags",
+            "notes", "source", "tags", "custom_fields",
         ]
 
 
@@ -105,7 +106,7 @@ class ApplicantDetailSerializer(serializers.ModelSerializer):
             "first_name", "last_name", "full_name", "email", "phone",
             "resume_url", "linkedin_url", "portfolio_url",
             "skills", "experience_years", "current_company", "current_role",
-            "notes", "source", "tags", "applications", "created_at", "updated_at",
+            "notes", "source", "tags", "custom_fields", "applications", "created_at", "updated_at",
         ]
         read_only_fields = ["id", "tenant_id", "owner_user_id", "created_at", "updated_at"]
 

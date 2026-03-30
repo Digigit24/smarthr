@@ -27,6 +27,11 @@ class Applicant(TenantBaseModel):
     notes = models.TextField(blank=True, default="")
     source = models.CharField(max_length=20, choices=Source.choices, default=Source.MANUAL)
     tags = models.JSONField(default=list, blank=True)
+    custom_fields = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Arbitrary key-value data from import or manual entry (e.g. salary expectation, notice period).",
+    )
 
     class Meta:
         db_table = "applicants"

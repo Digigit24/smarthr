@@ -96,9 +96,22 @@ def export_applicants(request: Request):
         ("created_at", "Created At"),
     ]
 
+    # Discover all distinct custom_fields keys across the queryset so each
+    # key gets its own export column.
+    custom_keys: list[str] = []
+    all_applicants = list(qs.iterator())
+    seen_keys: dict[str, None] = {}  # ordered dict to preserve insertion order
+    for applicant in all_applicants:
+        for key in (applicant.custom_fields or {}):
+            if key not in seen_keys:
+                seen_keys[key] = None
+    custom_keys = list(seen_keys)
+    for key in custom_keys:
+        columns.append((f"custom:{key}", key))
+
     rows = []
-    for applicant in qs.iterator():
-        rows.append({
+    for applicant in all_applicants:
+        row = {
             "first_name": applicant.first_name,
             "last_name": applicant.last_name,
             "email": applicant.email,
@@ -113,7 +126,11 @@ def export_applicants(request: Request):
             "portfolio_url": applicant.portfolio_url,
             "notes": applicant.notes,
             "created_at": applicant.created_at,
-        })
+        }
+        cf = applicant.custom_fields or {}
+        for key in custom_keys:
+            row[f"custom:{key}"] = str(cf.get(key, ""))
+        rows.append(row)
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -495,6 +512,8 @@ def import_preview(request: Request):
         "Upload an Excel file and a field mapping to bulk-create applicants. "
         "No fields are required during import – only mapped columns are populated. "
         "Rows with duplicate emails (per tenant) are skipped. "
+        "Set include_unmapped=true to store all unmapped Excel columns in the "
+        "applicant's custom_fields JSON (e.g. 'Expectation', 'Notice Period'). "
         "The response includes counts and per-row error details."
     ),
     request={
@@ -503,6 +522,11 @@ def import_preview(request: Request):
             "mapping": serializers.CharField(
                 help_text='JSON string mapping Excel column names to DB fields. '
                            'Example: {"Full Name": "first_name", "E-mail": "email"}',
+            ),
+            "include_unmapped": serializers.BooleanField(
+                help_text="When true, Excel columns not present in mapping are stored "
+                          "in custom_fields using the column header as key.",
+                required=False,
             ),
         }),
     },
@@ -556,6 +580,9 @@ def import_applicants(request: Request):
             status=400,
         )
 
+    # When true, unmapped Excel columns are stored in custom_fields
+    include_unmapped = str(request.data.get("include_unmapped", "false")).lower() in ("true", "1", "yes")
+
     # ---- read workbook --------------------------------------------------
     try:
         wb = openpyxl.load_workbook(uploaded_file, read_only=True, data_only=True)
@@ -585,6 +612,14 @@ def import_applicants(request: Request):
                 {"detail": f"Mapped Excel column '{excel_col}' not found in file headers."},
                 status=400,
             )
+
+    # Build col-index → header name lookup for unmapped columns
+    unmapped_cols: dict[int, str] = {}
+    if include_unmapped:
+        mapped_indexes = set(col_to_field.keys())
+        for idx, col_name in enumerate(columns):
+            if idx not in mapped_indexes and col_name:
+                unmapped_cols[idx] = col_name
 
     # ---- pre-fetch existing emails for this tenant (for skip logic) -----
     existing_emails: set[str] = set(
@@ -624,6 +659,19 @@ def import_applicants(request: Request):
                 row_data["last_name"] = parts[1] if len(parts) > 1 else ""
             else:
                 row_data[db_field] = cell_str
+
+        # Collect unmapped columns into custom_fields
+        if unmapped_cols:
+            custom: dict = {}
+            for col_idx, col_name in unmapped_cols.items():
+                cell_value = row[col_idx] if col_idx < len(row) else None
+                if cell_value is None:
+                    continue
+                cell_str = str(cell_value).strip()
+                if cell_str:
+                    custom[col_name] = cell_str
+            if custom:
+                row_data["custom_fields"] = custom
 
         # Skip completely empty rows
         if not row_data:
