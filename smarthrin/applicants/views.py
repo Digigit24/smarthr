@@ -151,6 +151,145 @@ IMPORTABLE_FIELDS: dict[str, str] = {
     "tags": "Tags",
 }
 
+# Aliases for fuzzy auto-mapping of Excel column headers to DB fields.
+# Keys are lowercase; values are the corresponding IMPORTABLE_FIELDS key.
+_FIELD_ALIASES: dict[str, str] = {
+    # first_name
+    "first name": "first_name",
+    "first_name": "first_name",
+    "firstname": "first_name",
+    "given name": "first_name",
+    "givenname": "first_name",
+    "forename": "first_name",
+    "prenom": "first_name",
+    "prénom": "first_name",
+    "nombre": "first_name",
+    "first": "first_name",
+    # last_name
+    "last name": "last_name",
+    "last_name": "last_name",
+    "lastname": "last_name",
+    "surname": "last_name",
+    "family name": "last_name",
+    "familyname": "last_name",
+    "nom": "last_name",
+    "apellido": "last_name",
+    "last": "last_name",
+    # email
+    "email": "email",
+    "e-mail": "email",
+    "email address": "email",
+    "e-mail address": "email",
+    "emailaddress": "email",
+    "mail": "email",
+    "contact email": "email",
+    "work email": "email",
+    "personal email": "email",
+    # phone
+    "phone": "phone",
+    "phone number": "phone",
+    "phonenumber": "phone",
+    "telephone": "phone",
+    "tel": "phone",
+    "mobile": "phone",
+    "mobile number": "phone",
+    "cell": "phone",
+    "cell phone": "phone",
+    "contact number": "phone",
+    "contact": "phone",
+    # resume_url
+    "resume url": "resume_url",
+    "resume link": "resume_url",
+    "resume": "resume_url",
+    "cv url": "resume_url",
+    "cv link": "resume_url",
+    "cv": "resume_url",
+    # linkedin_url
+    "linkedin url": "linkedin_url",
+    "linkedin link": "linkedin_url",
+    "linkedin": "linkedin_url",
+    "linkedin profile": "linkedin_url",
+    # portfolio_url
+    "portfolio url": "portfolio_url",
+    "portfolio link": "portfolio_url",
+    "portfolio": "portfolio_url",
+    "website": "portfolio_url",
+    "personal website": "portfolio_url",
+    # skills
+    "skills": "skills",
+    "skill": "skills",
+    "skill set": "skills",
+    "skillset": "skills",
+    "competencies": "skills",
+    "technologies": "skills",
+    "tech stack": "skills",
+    # experience_years
+    "experience years": "experience_years",
+    "experience (years)": "experience_years",
+    "years of experience": "experience_years",
+    "experience": "experience_years",
+    "yoe": "experience_years",
+    "exp": "experience_years",
+    "total experience": "experience_years",
+    # current_company
+    "current company": "current_company",
+    "company": "current_company",
+    "employer": "current_company",
+    "organization": "current_company",
+    "organisation": "current_company",
+    "current employer": "current_company",
+    # current_role
+    "current role": "current_role",
+    "role": "current_role",
+    "title": "current_role",
+    "job title": "current_role",
+    "position": "current_role",
+    "designation": "current_role",
+    "current title": "current_role",
+    "current position": "current_role",
+    # notes
+    "notes": "notes",
+    "note": "notes",
+    "comments": "notes",
+    "comment": "notes",
+    "remarks": "notes",
+    "remark": "notes",
+    # source
+    "source": "source",
+    "lead source": "source",
+    "channel": "source",
+    "origin": "source",
+    # tags
+    "tags": "tags",
+    "tag": "tags",
+    "labels": "tags",
+    "label": "tags",
+    "categories": "tags",
+    "category": "tags",
+}
+
+
+def _suggest_mapping(excel_columns: list[str]) -> dict[str, str]:
+    """
+    Return a best-effort mapping from Excel column names to DB field names.
+
+    Uses exact alias matching (case-insensitive). Each DB field is mapped at
+    most once (first match wins) to avoid ambiguous duplicates.
+    """
+    suggested: dict[str, str] = {}
+    used_fields: set[str] = set()
+
+    for col in excel_columns:
+        normalised = col.strip().lower()
+        if not normalised:
+            continue
+        db_field = _FIELD_ALIASES.get(normalised)
+        if db_field and db_field not in used_fields:
+            suggested[col] = db_field
+            used_fields.add(db_field)
+
+    return suggested
+
 
 @extend_schema(
     tags=["Applicants"],
@@ -187,6 +326,7 @@ def import_fields(request: Request):
         200: inline_serializer("ImportPreviewResponse", fields={
             "columns": serializers.ListField(child=serializers.CharField()),
             "sample_data": serializers.ListField(child=serializers.DictField()),
+            "suggested_mapping": serializers.DictField(child=serializers.CharField()),
         }),
     },
 )
@@ -232,7 +372,11 @@ def import_preview(request: Request):
         })
 
     wb.close()
-    return Response({"columns": columns, "sample_data": sample_data})
+    return Response({
+        "columns": columns,
+        "sample_data": sample_data,
+        "suggested_mapping": _suggest_mapping(columns),
+    })
 
 
 @extend_schema(
