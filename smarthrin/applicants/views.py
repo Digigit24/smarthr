@@ -515,8 +515,8 @@ def import_preview(request: Request):
         "Upload an Excel file and a field mapping to bulk-create applicants. "
         "No fields are required during import – only mapped columns are populated. "
         "Rows with duplicate emails (per tenant) are skipped. "
-        "Set include_unmapped=true to store all unmapped Excel columns in the "
-        "applicant's custom_fields JSON (e.g. 'Expectation', 'Notice Period'). "
+        "Use the 'custom:' prefix in mapping values to store columns as custom fields "
+        "(e.g. 'custom:notice_period'). Maximum 20 custom fields per applicant. "
         "The response includes counts and per-row error details."
     ),
     request={
@@ -524,12 +524,8 @@ def import_preview(request: Request):
             "file": serializers.FileField(help_text="The .xlsx file to import."),
             "mapping": serializers.CharField(
                 help_text='JSON string mapping Excel column names to DB fields. '
-                           'Example: {"Full Name": "first_name", "E-mail": "email"}',
-            ),
-            "include_unmapped": serializers.BooleanField(
-                help_text="When true, Excel columns not present in mapping are stored "
-                          "in custom_fields using the column header as key.",
-                required=False,
+                           'Standard fields: {"Full Name": "first_name", "E-mail": "email"}. '
+                           'Custom fields: {"Salary": "custom:expected_salary", "NP": "custom:notice_period"}.',
             ),
         }),
     },
@@ -575,16 +571,42 @@ def import_applicants(request: Request):
     except (json.JSONDecodeError, TypeError):
         return Response({"detail": "Invalid mapping JSON."}, status=400)
 
-    # Ensure every target field is a real importable field
-    invalid_fields = [v for v in mapping.values() if v not in IMPORTABLE_FIELDS]
+    # Separate standard field mappings from custom field mappings.
+    # Standard: {"Excel Col": "email"}
+    # Custom:   {"Excel Col": "custom:notice_period"}
+    standard_mapping: dict[str, str] = {}
+    custom_mapping: dict[str, str] = {}  # excel_col → custom key name
+
+    for excel_col, target in mapping.items():
+        if target.startswith("custom:"):
+            custom_key = target[7:].strip()
+            if not custom_key:
+                return Response(
+                    {"detail": f"Empty custom field name for column '{excel_col}'."},
+                    status=400,
+                )
+            if len(custom_key) > 100:
+                return Response(
+                    {"detail": f"Custom field name '{custom_key[:50]}...' exceeds 100 characters."},
+                    status=400,
+                )
+            custom_mapping[excel_col] = custom_key
+        else:
+            standard_mapping[excel_col] = target
+
+    # Validate standard target fields
+    invalid_fields = [v for v in standard_mapping.values() if v not in IMPORTABLE_FIELDS]
     if invalid_fields:
         return Response(
             {"detail": f"Invalid target fields: {', '.join(invalid_fields)}"},
             status=400,
         )
 
-    # When true, unmapped Excel columns are stored in custom_fields
-    include_unmapped = str(request.data.get("include_unmapped", "false")).lower() in ("true", "1", "yes")
+    if len(custom_mapping) > 20:
+        return Response(
+            {"detail": f"Maximum 20 custom fields allowed, got {len(custom_mapping)}."},
+            status=400,
+        )
 
     # ---- read workbook --------------------------------------------------
     try:
@@ -607,9 +629,9 @@ def import_applicants(request: Request):
 
         columns = [str(c).strip() if c is not None else "" for c in header_row]
 
-        # Build col-index → db_field lookup from the mapping
+        # Build col-index → db_field lookup for standard fields
         col_to_field: dict[int, str] = {}
-        for excel_col, db_field in mapping.items():
+        for excel_col, db_field in standard_mapping.items():
             try:
                 idx = columns.index(excel_col)
                 col_to_field[idx] = db_field
@@ -619,18 +641,15 @@ def import_applicants(request: Request):
                     status=400,
                 )
 
-        # Build col-index → header name lookup for unmapped columns
-        unmapped_cols: dict[int, str] = {}
-        if include_unmapped:
-            mapped_indexes = set(col_to_field.keys())
-            for idx, col_name in enumerate(columns):
-                if idx not in mapped_indexes and col_name:
-                    unmapped_cols[idx] = col_name
-            if len(unmapped_cols) > 20:
+        # Build col-index → custom key name lookup
+        col_to_custom: dict[int, str] = {}
+        for excel_col, custom_key in custom_mapping.items():
+            try:
+                idx = columns.index(excel_col)
+                col_to_custom[idx] = custom_key
+            except ValueError:
                 return Response(
-                    {"detail": f"Too many unmapped columns ({len(unmapped_cols)}). "
-                               "Maximum 20 custom fields allowed. "
-                               "Please map more columns or disable include_unmapped."},
+                    {"detail": f"Mapped Excel column '{excel_col}' not found in file headers."},
                     status=400,
                 )
 
@@ -673,16 +692,16 @@ def import_applicants(request: Request):
                 else:
                     row_data[db_field] = cell_str
 
-            # Collect unmapped columns into custom_fields
-            if unmapped_cols:
+            # Collect custom-mapped columns into custom_fields
+            if col_to_custom:
                 custom: dict = {}
-                for col_idx, col_name in unmapped_cols.items():
+                for col_idx, custom_key in col_to_custom.items():
                     cell_value = row[col_idx] if col_idx < len(row) else None
                     if cell_value is None:
                         continue
                     cell_str = str(cell_value).strip()
                     if cell_str:
-                        custom[col_name] = cell_str
+                        custom[custom_key] = cell_str
                 if custom:
                     row_data["custom_fields"] = custom
 
