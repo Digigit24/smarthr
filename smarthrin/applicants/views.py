@@ -626,6 +626,13 @@ def import_applicants(request: Request):
             for idx, col_name in enumerate(columns):
                 if idx not in mapped_indexes and col_name:
                     unmapped_cols[idx] = col_name
+            if len(unmapped_cols) > 20:
+                return Response(
+                    {"detail": f"Too many unmapped columns ({len(unmapped_cols)}). "
+                               "Maximum 20 custom fields allowed. "
+                               "Please map more columns or disable include_unmapped."},
+                    status=400,
+                )
 
         # ---- pre-fetch existing emails for this tenant (for skip logic) -----
         existing_emails: set[str] = set(

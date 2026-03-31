@@ -61,6 +61,24 @@ class ApplicantCreateSerializer(serializers.ModelSerializer):
             )
         return value
 
+    def validate_custom_fields(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("custom_fields must be a JSON object.")
+        if len(value) > 20:
+            raise serializers.ValidationError(
+                f"Maximum 20 custom fields allowed, got {len(value)}."
+            )
+        for key, val in value.items():
+            if len(key) > 100:
+                raise serializers.ValidationError(
+                    f"Custom field key '{key[:50]}...' exceeds 100 characters."
+                )
+            if not isinstance(val, (str, int, float, bool, type(None))):
+                raise serializers.ValidationError(
+                    f"Custom field '{key}' must be a simple value (string, number, or boolean)."
+                )
+        return value
+
 
 class ApplicantImportSerializer(serializers.ModelSerializer):
     """
@@ -83,7 +101,23 @@ class ApplicantImportSerializer(serializers.ModelSerializer):
     notes = serializers.CharField(required=False, default="")
     source = serializers.ChoiceField(choices=Applicant.Source.choices, required=False, default=Applicant.Source.IMPORT)
     tags = serializers.ListField(child=serializers.CharField(), required=False, default=list)
-    custom_fields = serializers.DictField(required=False, default=dict)
+    custom_fields = serializers.DictField(
+        child=serializers.CharField(max_length=1000),
+        required=False,
+        default=dict,
+    )
+
+    def validate_custom_fields(self, value):
+        if len(value) > 20:
+            raise serializers.ValidationError(
+                f"Maximum 20 custom fields allowed, got {len(value)}."
+            )
+        for key in value:
+            if len(key) > 100:
+                raise serializers.ValidationError(
+                    f"Custom field key '{key[:50]}...' exceeds 100 characters."
+                )
+        return value
 
     class Meta:
         model = Applicant
