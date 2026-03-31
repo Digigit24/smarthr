@@ -627,7 +627,7 @@ def import_applicants(request: Request):
         except StopIteration:
             return Response({"detail": "The uploaded file has no data."}, status=400)
 
-        columns = [str(c).strip() if c is not None else "" for c in header_row]
+        columns = [str(c).strip() if c is not None else f"Column {i+1}" for i, c in enumerate(header_row)]
 
         # Build col-index → db_field lookup for standard fields
         col_to_field: dict[int, str] = {}
