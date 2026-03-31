@@ -15,7 +15,7 @@ class Applicant(TenantBaseModel):
 
     first_name = models.CharField(max_length=255)
     last_name = models.CharField(max_length=255)
-    email = models.EmailField()
+    email = models.EmailField(blank=True, default="")
     phone = models.CharField(max_length=20, blank=True, default="")
     resume_url = models.URLField(blank=True, default="")
     linkedin_url = models.URLField(blank=True, default="")
@@ -46,6 +46,7 @@ class Applicant(TenantBaseModel):
             models.UniqueConstraint(
                 fields=["tenant_id", "email"],
                 name="unique_tenant_applicant_email",
+                condition=models.Q(email__gt=""),
             )
         ]
 

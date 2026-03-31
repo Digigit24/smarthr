@@ -533,7 +533,6 @@ def import_preview(request: Request):
         200: inline_serializer("ImportApplicantsResponse", fields={
             "total_rows": serializers.IntegerField(),
             "imported": serializers.IntegerField(),
-            "skipped": serializers.IntegerField(),
             "errors": serializers.ListField(child=serializers.DictField()),
         }),
     },
@@ -653,15 +652,7 @@ def import_applicants(request: Request):
                     status=400,
                 )
 
-        # ---- pre-fetch existing emails for this tenant (for skip logic) -----
-        existing_emails: set[str] = set(
-            email.lower() for email in
-            Applicant.objects.filter(tenant_id=request.tenant_id)
-            .values_list("email", flat=True)
-        )
-
         # ---- iterate rows and build applicant dicts -------------------------
-        skipped = 0
         errors: list[dict] = []
         batch: list[dict] = []
 
@@ -713,16 +704,7 @@ def import_applicants(request: Request):
             if "source" not in col_to_field.values():
                 row_data["source"] = "IMPORT"
 
-            # Duplicate email check (skip row, don't error)
-            email = row_data.get("email", "").lower()
-            if email:
-                if email in existing_emails:
-                    skipped += 1
-                    continue
-                # Track the email so later rows in the same file won't duplicate it
-                existing_emails.add(email)
-
-            # Validate through serializer (no required fields)
+            # Validate through serializer (no required fields for import)
             ser = ApplicantImportSerializer(data=row_data, context={"request": request})
             if not ser.is_valid():
                 errors.append({"row": row_num, "errors": ser.errors})
@@ -732,13 +714,7 @@ def import_applicants(request: Request):
     finally:
         wb.close()
 
-    # ---- bulk create ----------------------------------------------------
-    # Assign unique placeholder emails for rows without email so the
-    # unique constraint (tenant_id, email) doesn't silently drop them.
-    for data in batch:
-        if not data.get("email"):
-            data["email"] = f"import-{uuid.uuid4()}@placeholder.local"
-
+    # ---- bulk create (no constraints for import) --------------------------
     applicants_to_create = [
         Applicant(
             tenant_id=request.tenant_id,
@@ -748,33 +724,27 @@ def import_applicants(request: Request):
         for data in batch
     ]
 
+    imported = 0
     if applicants_to_create:
-        count_before = Applicant.objects.filter(tenant_id=request.tenant_id).count()
-        Applicant.objects.bulk_create(applicants_to_create, ignore_conflicts=True)
-        count_after = Applicant.objects.filter(tenant_id=request.tenant_id).count()
-        imported = count_after - count_before
+        Applicant.objects.bulk_create(applicants_to_create)
+        imported = len(applicants_to_create)
 
-        # Log a single activity for the whole import
-        if imported:
-            log_activity(
-                tenant_id=str(request.tenant_id),
-                actor_user_id=str(request.user_id),
-                actor_email=getattr(request, "email", ""),
-                verb=Activity.Verb.CREATED,
-                resource_type="Applicant",
-                resource_id=str(uuid.uuid4()),
-                resource_label=f"Bulk import of {imported} applicants",
-                after={"action": "bulk_import", "count": imported},
-            )
-    else:
-        imported = 0
+        log_activity(
+            tenant_id=str(request.tenant_id),
+            actor_user_id=str(request.user_id),
+            actor_email=getattr(request, "email", ""),
+            verb=Activity.Verb.CREATED,
+            resource_type="Applicant",
+            resource_id=str(uuid.uuid4()),
+            resource_label=f"Bulk import of {imported} applicants",
+            after={"action": "bulk_import", "count": imported},
+        )
 
-    total_rows = imported + skipped + len(errors)
+    total_rows = imported + len(errors)
 
     return Response({
         "total_rows": total_rows,
         "imported": imported,
-        "skipped": skipped,
         "errors": errors,
     })
 
