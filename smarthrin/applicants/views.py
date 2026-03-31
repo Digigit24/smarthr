@@ -715,9 +715,12 @@ def import_applicants(request: Request):
 
             # Duplicate email check (skip row, don't error)
             email = row_data.get("email", "").lower()
-            if email and email in existing_emails:
-                skipped += 1
-                continue
+            if email:
+                if email in existing_emails:
+                    skipped += 1
+                    continue
+                # Track the email so later rows in the same file won't duplicate it
+                existing_emails.add(email)
 
             # Validate through serializer (no required fields)
             ser = ApplicantImportSerializer(data=row_data, context={"request": request})
@@ -726,14 +729,16 @@ def import_applicants(request: Request):
                 continue
 
             batch.append(ser.validated_data)
-
-            # Track the email so later rows in the same file won't duplicate it
-            if email:
-                existing_emails.add(email)
     finally:
         wb.close()
 
     # ---- bulk create ----------------------------------------------------
+    # Assign unique placeholder emails for rows without email so the
+    # unique constraint (tenant_id, email) doesn't silently drop them.
+    for data in batch:
+        if not data.get("email"):
+            data["email"] = f"import-{uuid.uuid4()}@placeholder.local"
+
     applicants_to_create = [
         Applicant(
             tenant_id=request.tenant_id,
