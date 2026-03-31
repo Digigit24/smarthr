@@ -33,7 +33,12 @@ class ApplicantListSerializer(serializers.ModelSerializer):
 
 
 class ApplicantCreateSerializer(serializers.ModelSerializer):
-    """Write serializer for create/update."""
+    """Write serializer for create/update — keeps full validation."""
+    email = serializers.EmailField(required=True)
+    resume_url = serializers.URLField(required=False, allow_blank=True)
+    linkedin_url = serializers.URLField(required=False, allow_blank=True)
+    portfolio_url = serializers.URLField(required=False, allow_blank=True)
+
     class Meta:
         model = Applicant
         fields = [
@@ -82,23 +87,22 @@ class ApplicantCreateSerializer(serializers.ModelSerializer):
 
 class ApplicantImportSerializer(serializers.ModelSerializer):
     """
-    Write serializer for bulk import – every field is optional.
-
-    Manual-entry validation (required first_name, last_name, email) stays
-    in ApplicantCreateSerializer and is NOT affected by this serializer.
+    Write serializer for bulk import – every field is optional, no format
+    validation. Manual-entry validation (required fields, email format,
+    uniqueness) stays in ApplicantCreateSerializer.
     """
     first_name = serializers.CharField(max_length=255, required=False, default="")
     last_name = serializers.CharField(max_length=255, required=False, default="")
-    email = serializers.EmailField(required=False, default="")
-    phone = serializers.CharField(max_length=20, required=False, default="")
-    resume_url = serializers.URLField(required=False, default="")
-    linkedin_url = serializers.URLField(required=False, default="")
-    portfolio_url = serializers.URLField(required=False, default="")
+    email = serializers.CharField(max_length=254, required=False, default="", allow_blank=True)
+    phone = serializers.CharField(max_length=50, required=False, default="", allow_blank=True)
+    resume_url = serializers.CharField(max_length=500, required=False, default="", allow_blank=True)
+    linkedin_url = serializers.CharField(max_length=500, required=False, default="", allow_blank=True)
+    portfolio_url = serializers.CharField(max_length=500, required=False, default="", allow_blank=True)
     skills = serializers.ListField(child=serializers.CharField(), required=False, default=list)
     experience_years = serializers.IntegerField(required=False, allow_null=True, default=None)
     current_company = serializers.CharField(max_length=255, required=False, default="")
     current_role = serializers.CharField(max_length=255, required=False, default="")
-    notes = serializers.CharField(required=False, default="")
+    notes = serializers.CharField(required=False, default="", allow_blank=True)
     source = serializers.ChoiceField(choices=Applicant.Source.choices, required=False, default=Applicant.Source.IMPORT)
     tags = serializers.ListField(child=serializers.CharField(), required=False, default=list)
     custom_fields = serializers.DictField(

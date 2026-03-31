@@ -513,11 +513,10 @@ def import_preview(request: Request):
     summary="Import applicants from Excel",
     description=(
         "Upload an Excel file and a field mapping to bulk-create applicants. "
-        "No fields are required during import – only mapped columns are populated. "
-        "Rows with duplicate emails (per tenant) are skipped. "
-        "Use the 'custom:' prefix in mapping values to store columns as custom fields "
-        "(e.g. 'custom:notice_period'). Maximum 20 custom fields per applicant. "
-        "The response includes counts and per-row error details."
+        "No fields are required and no uniqueness constraints are applied during import – "
+        "every row is saved as-is. Use the 'custom:' prefix in mapping values to store "
+        "columns as custom fields (e.g. 'custom:notice_period'). Maximum 20 custom fields "
+        "per applicant. The response includes counts and per-row error details."
     ),
     request={
         "multipart/form-data": inline_serializer("ImportApplicantsRequest", fields={
