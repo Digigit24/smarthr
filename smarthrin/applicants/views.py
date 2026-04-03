@@ -494,7 +494,11 @@ def import_preview(request: Request):
         sample_data = []
         for _, row in zip(range(5), rows_iter):
             sample_data.append({
-                columns[i]: (str(cell).strip() if cell is not None else "")
+                columns[i]: (
+                    str(int(cell)).strip() if isinstance(cell, float) and cell.is_integer()
+                    else str(cell).strip() if cell is not None
+                    else ""
+                )
                 for i, cell in enumerate(row)
                 if i < len(columns)
             })
@@ -662,7 +666,12 @@ def import_applicants(request: Request):
                 if cell_value is None:
                     continue
 
-                cell_str = str(cell_value).strip()
+                # Excel stores numbers as floats; strip trailing .0 for
+                # fields like phone where the value is really an integer.
+                if isinstance(cell_value, float) and cell_value.is_integer():
+                    cell_str = str(int(cell_value)).strip()
+                else:
+                    cell_str = str(cell_value).strip()
                 if not cell_str:
                     continue
 
@@ -689,7 +698,10 @@ def import_applicants(request: Request):
                     cell_value = row[col_idx] if col_idx < len(row) else None
                     if cell_value is None:
                         continue
-                    cell_str = str(cell_value).strip()
+                    if isinstance(cell_value, float) and cell_value.is_integer():
+                        cell_str = str(int(cell_value)).strip()
+                    else:
+                        cell_str = str(cell_value).strip()
                     if cell_str:
                         custom[custom_key] = cell_str
                 if custom:
