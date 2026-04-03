@@ -108,8 +108,11 @@ class VoiceAIClient:
                 raise VoiceAINotFoundError(message, details=details)
             elif resp.status_code == 400 and code == "CREDENTIALS_MISSING":
                 raise VoiceAICredentialsMissing(message, details=details)
-            elif resp.status_code in (502, 503, 504):
-                raise VoiceAIProviderError(message, details=details)
+            elif resp.status_code in (500, 502, 503, 504):
+                raise VoiceAIProviderError(
+                    message or "Voice AI service encountered an internal error",
+                    details=details,
+                )
             elif resp.status_code == 400:
                 raise VoiceAIValidationError(message, details=details)
             else:

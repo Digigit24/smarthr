@@ -373,12 +373,15 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        log_activity_for_request(
-            request,
-            verb=Activity.Verb.TRIGGERED_CALL,
-            resource=application,
-            metadata={"call_record_id": str(call_record.pk)},
-        )
+        try:
+            log_activity_for_request(
+                request,
+                verb=Activity.Verb.TRIGGERED_CALL,
+                resource=application,
+                metadata={"call_record_id": str(call_record.pk)},
+            )
+        except Exception:
+            logger.exception("Failed to log activity for AI call on application %s", pk)
 
         serializer = CallRecordSerializer(call_record, context={"request": request})
         return Response(serializer.data, status=status.HTTP_201_CREATED)
