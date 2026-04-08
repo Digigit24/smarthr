@@ -332,7 +332,7 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
     def trigger_ai_call(self, request, pk=None):
         """Manually trigger an AI screening call for this application."""
         from calls.serializers import CallRecordSerializer
-        from calls.services import trigger_ai_screening_call
+        from calls.services import ActiveCallExistsError, trigger_ai_screening_call
         from integrations.exceptions import VoiceAIError
 
         application = self.get_object()
@@ -350,6 +350,22 @@ class ApplicationViewSet(TenantViewSetMixin, ModelViewSet):
                 tenant_id=str(request.tenant_id),
                 owner_user_id=str(request.user_id),
                 auth_token=auth_token,
+            )
+        except ActiveCallExistsError as exc:
+            return Response(
+                {
+                    "error": str(exc),
+                    "code": "active_call_exists",
+                    "details": {
+                        "active_call_id": str(exc.call_record.id),
+                        "active_call_status": exc.call_record.status,
+                        "active_call_created_at": exc.call_record.created_at.isoformat(),
+                        "stale_at": exc.stale_at.isoformat() if exc.stale_at else None,
+                        "seconds_until_stale": exc.seconds_until_stale,
+                        "stale_threshold_minutes": exc.threshold_minutes,
+                    },
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
         except ValueError as exc:
             raise ValidationError({"detail": str(exc)})

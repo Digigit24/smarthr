@@ -28,6 +28,59 @@ def _normalize_phone(phone: str) -> str:
     return normalized
 
 
+def get_call_stale_threshold_minutes() -> int:
+    """Returns the configured stale-call cutoff in minutes."""
+    return getattr(settings, "CALL_STALE_THRESHOLD_MINUTES", 5)
+
+
+def compute_call_stale_at(call_record) -> Optional[Any]:
+    """
+    Returns the datetime at which an in-flight CallRecord becomes stale.
+    Returns None for terminal-status calls (the field is meaningless for them).
+    """
+    from .models import CallRecord
+
+    in_flight_statuses = {
+        CallRecord.Status.QUEUED,
+        CallRecord.Status.INITIATED,
+        CallRecord.Status.RINGING,
+        CallRecord.Status.IN_PROGRESS,
+    }
+    if call_record.status not in in_flight_statuses:
+        return None
+    return call_record.created_at + timedelta(minutes=get_call_stale_threshold_minutes())
+
+
+def compute_seconds_until_stale(call_record) -> Optional[int]:
+    """
+    Returns whole seconds until the call is auto-failed.
+    Negative if already past the threshold (i.e. immediately reapable).
+    Returns None for terminal-status calls.
+    """
+    stale_at = compute_call_stale_at(call_record)
+    if stale_at is None:
+        return None
+    return int((stale_at - timezone.now()).total_seconds())
+
+
+class ActiveCallExistsError(Exception):
+    """
+    Raised when a new screening call cannot be dispatched because an active
+    (non-stale) CallRecord already exists for the application. Carries
+    structured info so the API can return a useful 400 payload to the frontend.
+    """
+
+    def __init__(self, call_record) -> None:
+        self.call_record = call_record
+        self.stale_at = compute_call_stale_at(call_record)
+        self.seconds_until_stale = compute_seconds_until_stale(call_record)
+        self.threshold_minutes = get_call_stale_threshold_minutes()
+        super().__init__(
+            f"An active call (id={call_record.id}, status={call_record.status}) "
+            f"already exists for this application."
+        )
+
+
 class AIScreeningService:
     """
     Orchestrates AI voice screening calls for job applications.
@@ -95,19 +148,19 @@ class AIScreeningService:
             CallRecord.Status.RINGING,
             CallRecord.Status.IN_PROGRESS,
         ]
-        stale_threshold_minutes = getattr(settings, "CALL_STALE_THRESHOLD_MINUTES", 15)
+        stale_threshold_minutes = get_call_stale_threshold_minutes()
         stale_cutoff = timezone.now() - timedelta(minutes=stale_threshold_minutes)
 
-        existing_active_calls = CallRecord.objects.filter(
-            application=application,
-            tenant_id=tenant_id,
-            status__in=active_statuses,
-        )
-
         # Reap stale in-flight records before evaluating the guard.
-        stale_calls = list(existing_active_calls.filter(created_at__lt=stale_cutoff))
-        if stale_calls:
-            stale_ids = [c.id for c in stale_calls]
+        stale_ids = list(
+            CallRecord.objects.filter(
+                application=application,
+                tenant_id=tenant_id,
+                status__in=active_statuses,
+                created_at__lt=stale_cutoff,
+            ).values_list("id", flat=True)
+        )
+        if stale_ids:
             CallRecord.objects.filter(id__in=stale_ids).update(
                 status=CallRecord.Status.FAILED,
                 error_message=(
@@ -126,15 +179,13 @@ class AIScreeningService:
                 application=application,
                 tenant_id=tenant_id,
                 status__in=active_statuses,
+                created_at__gte=stale_cutoff,
             )
-            .filter(created_at__gte=stale_cutoff)
+            .order_by("-created_at")
             .first()
         )
         if existing_call:
-            raise ValueError(
-                f"An active call (id={existing_call.id}, status={existing_call.status}) "
-                "already exists for this application."
-            )
+            raise ActiveCallExistsError(existing_call)
 
         # 3. Build call context and metadata
         call_context = {

@@ -2,6 +2,29 @@
 from rest_framework import serializers
 
 from .models import CallRecord, Scorecard
+from .services import (
+    compute_call_stale_at,
+    compute_seconds_until_stale,
+    get_call_stale_threshold_minutes,
+)
+
+
+class _CallStaleFieldsMixin:
+    """
+    Adds stale_at / seconds_until_stale / stale_threshold_minutes fields to a
+    CallRecord serializer so the frontend can render a "minutes until you can
+    re-trigger" countdown without computing the threshold itself.
+    """
+
+    def get_stale_at(self, obj):
+        stale_at = compute_call_stale_at(obj)
+        return stale_at.isoformat() if stale_at else None
+
+    def get_seconds_until_stale(self, obj):
+        return compute_seconds_until_stale(obj)
+
+    def get_stale_threshold_minutes(self, obj):
+        return get_call_stale_threshold_minutes()
 
 
 class ScorecardSerializer(serializers.ModelSerializer):
@@ -51,8 +74,12 @@ class ScorecardListSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at"]
 
 
-class CallRecordListSerializer(serializers.ModelSerializer):
+class CallRecordListSerializer(_CallStaleFieldsMixin, serializers.ModelSerializer):
     """Compact serializer for CallRecord list views."""
+
+    stale_at = serializers.SerializerMethodField()
+    seconds_until_stale = serializers.SerializerMethodField()
+    stale_threshold_minutes = serializers.SerializerMethodField()
 
     class Meta:
         model = CallRecord
@@ -69,6 +96,9 @@ class CallRecordListSerializer(serializers.ModelSerializer):
             "created_at",
             "provider_call_id",
             "voice_agent_id",
+            "stale_at",
+            "seconds_until_stale",
+            "stale_threshold_minutes",
         ]
         read_only_fields = ["id", "created_at"]
 
@@ -81,7 +111,7 @@ class CallRecordQueueItemSerializer(serializers.Serializer):
     position = serializers.IntegerField()
 
 
-class CallRecordDetailSerializer(serializers.ModelSerializer):
+class CallRecordDetailSerializer(_CallStaleFieldsMixin, serializers.ModelSerializer):
     """Full serializer for CallRecord detail views — includes nested scorecard and queue info."""
 
     scorecard = serializers.SerializerMethodField()
@@ -89,6 +119,9 @@ class CallRecordDetailSerializer(serializers.ModelSerializer):
     applicant_name = serializers.SerializerMethodField()
     applicant_email = serializers.SerializerMethodField()
     job_title = serializers.SerializerMethodField()
+    stale_at = serializers.SerializerMethodField()
+    seconds_until_stale = serializers.SerializerMethodField()
+    stale_threshold_minutes = serializers.SerializerMethodField()
 
     class Meta:
         model = CallRecord
@@ -117,6 +150,9 @@ class CallRecordDetailSerializer(serializers.ModelSerializer):
             "updated_at",
             "scorecard",
             "queue_item",
+            "stale_at",
+            "seconds_until_stale",
+            "stale_threshold_minutes",
         ]
         read_only_fields = [
             "id",
@@ -187,8 +223,13 @@ class AvailableAgentSerializer(serializers.Serializer):
         return getattr(obj, "is_active", True)
 
 
-class CallRecordSerializer(serializers.ModelSerializer):
+class CallRecordSerializer(_CallStaleFieldsMixin, serializers.ModelSerializer):
     """Alias used by applications/views.py trigger_ai_call for response."""
+
+    stale_at = serializers.SerializerMethodField()
+    seconds_until_stale = serializers.SerializerMethodField()
+    stale_threshold_minutes = serializers.SerializerMethodField()
+
     class Meta:
         model = CallRecord
         fields = [
@@ -196,5 +237,6 @@ class CallRecordSerializer(serializers.ModelSerializer):
             "provider_call_id", "phone", "status", "duration",
             "summary", "recording_url", "started_at", "ended_at",
             "error_message", "created_at", "updated_at",
+            "stale_at", "seconds_until_stale", "stale_threshold_minutes",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]

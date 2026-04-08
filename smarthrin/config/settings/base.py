@@ -37,7 +37,7 @@ VOICE_AI_API_KEY = env("VOICE_AI_API_KEY", default="")
 # (QUEUED/INITIATED/RINGING/IN_PROGRESS) before it is considered stale/abandoned.
 # Stale records are automatically marked FAILED so a new call can be dispatched,
 # which handles the case of missed provider webhooks.
-CALL_STALE_THRESHOLD_MINUTES = env.int("CALL_STALE_THRESHOLD_MINUTES", default=15)
+CALL_STALE_THRESHOLD_MINUTES = env.int("CALL_STALE_THRESHOLD_MINUTES", default=5)
 
 # Google Calendar (optional — leave blank to disable calendar sync)
 # Set CREDENTIALS_JSON to enable. DELEGATE_EMAIL is only needed for Google Workspace.

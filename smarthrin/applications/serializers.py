@@ -87,6 +87,22 @@ class InlineCallRecordSerializer(serializers.Serializer):
     started_at = serializers.DateTimeField(allow_null=True)
     ended_at = serializers.DateTimeField(allow_null=True)
     created_at = serializers.DateTimeField()
+    stale_at = serializers.SerializerMethodField()
+    seconds_until_stale = serializers.SerializerMethodField()
+    stale_threshold_minutes = serializers.SerializerMethodField()
+
+    def get_stale_at(self, obj):
+        from calls.services import compute_call_stale_at
+        stale_at = compute_call_stale_at(obj)
+        return stale_at.isoformat() if stale_at else None
+
+    def get_seconds_until_stale(self, obj):
+        from calls.services import compute_seconds_until_stale
+        return compute_seconds_until_stale(obj)
+
+    def get_stale_threshold_minutes(self, obj):
+        from calls.services import get_call_stale_threshold_minutes
+        return get_call_stale_threshold_minutes()
 
 
 class InlineScorecardSerializer(serializers.Serializer):
