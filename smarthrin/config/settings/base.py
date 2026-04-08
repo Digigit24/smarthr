@@ -33,6 +33,12 @@ SUPERADMIN_URL = env("SUPERADMIN_URL", default="https://admin.celiyo.com")
 VOICE_AI_API_URL = env("VOICE_AI_API_URL", default="http://localhost:4000")
 VOICE_AI_API_KEY = env("VOICE_AI_API_KEY", default="")
 
+# How long (in minutes) a CallRecord may stay in an in-flight status
+# (QUEUED/INITIATED/RINGING/IN_PROGRESS) before it is considered stale/abandoned.
+# Stale records are automatically marked FAILED so a new call can be dispatched,
+# which handles the case of missed provider webhooks.
+CALL_STALE_THRESHOLD_MINUTES = env.int("CALL_STALE_THRESHOLD_MINUTES", default=15)
+
 # Google Calendar (optional — leave blank to disable calendar sync)
 # Set CREDENTIALS_JSON to enable. DELEGATE_EMAIL is only needed for Google Workspace.
 GOOGLE_CALENDAR_CREDENTIALS_JSON = env("GOOGLE_CALENDAR_CREDENTIALS_JSON", default="")

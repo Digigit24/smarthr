@@ -1,10 +1,12 @@
 """AI Screening Call service — bridges SmartHR-In models with Voice AI Orchestrator."""
 import logging
 import re
+from datetime import timedelta
 from typing import Any, Optional
 
 from django.conf import settings
 from django.db import transaction
+from django.utils import timezone
 
 from integrations.exceptions import VoiceAIError
 from integrations.voice_ai import VoiceAIClient
@@ -84,18 +86,50 @@ class AIScreeningService:
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
 
-        # Check for active call already in progress
+        # Check for active call already in progress. Records older than
+        # CALL_STALE_THRESHOLD_MINUTES are treated as abandoned (missed webhook
+        # from the provider) — auto-fail them so a new call can be dispatched.
         active_statuses = [
             CallRecord.Status.QUEUED,
             CallRecord.Status.INITIATED,
             CallRecord.Status.RINGING,
             CallRecord.Status.IN_PROGRESS,
         ]
-        existing_call = CallRecord.objects.filter(
+        stale_threshold_minutes = getattr(settings, "CALL_STALE_THRESHOLD_MINUTES", 15)
+        stale_cutoff = timezone.now() - timedelta(minutes=stale_threshold_minutes)
+
+        existing_active_calls = CallRecord.objects.filter(
             application=application,
             tenant_id=tenant_id,
             status__in=active_statuses,
-        ).first()
+        )
+
+        # Reap stale in-flight records before evaluating the guard.
+        stale_calls = list(existing_active_calls.filter(created_at__lt=stale_cutoff))
+        if stale_calls:
+            stale_ids = [c.id for c in stale_calls]
+            CallRecord.objects.filter(id__in=stale_ids).update(
+                status=CallRecord.Status.FAILED,
+                error_message=(
+                    f"Auto-failed: no terminal status received within "
+                    f"{stale_threshold_minutes} minutes (likely missed provider webhook)."
+                ),
+                updated_at=timezone.now(),
+            )
+            logger.warning(
+                "Auto-failed %d stale call record(s) for application %s: %s",
+                len(stale_ids), application_id, stale_ids,
+            )
+
+        existing_call = (
+            CallRecord.objects.filter(
+                application=application,
+                tenant_id=tenant_id,
+                status__in=active_statuses,
+            )
+            .filter(created_at__gte=stale_cutoff)
+            .first()
+        )
         if existing_call:
             raise ValueError(
                 f"An active call (id={existing_call.id}, status={existing_call.status}) "

@@ -200,15 +200,46 @@ def dispatch_queue_item(self, item_id: str, tenant_id: str) -> Optional[str]:
 
         # Check for existing active call records for this application (not just linked items).
         # This catches orphaned CallRecords that weren't linked back to the queue item.
+        # Records older than CALL_STALE_THRESHOLD_MINUTES are treated as abandoned
+        # (missed provider webhook) and auto-failed so this item can proceed.
+        from datetime import timedelta
+        from django.conf import settings as django_settings
+        from django.utils import timezone
+
         active_statuses = [
             CallRecord.Status.QUEUED,
             CallRecord.Status.INITIATED,
             CallRecord.Status.RINGING,
             CallRecord.Status.IN_PROGRESS,
         ]
+        stale_threshold_minutes = getattr(django_settings, "CALL_STALE_THRESHOLD_MINUTES", 15)
+        stale_cutoff = timezone.now() - timedelta(minutes=stale_threshold_minutes)
+
+        stale_ids = list(
+            CallRecord.objects.filter(
+                application=item.application,
+                status__in=active_statuses,
+                created_at__lt=stale_cutoff,
+            ).values_list("id", flat=True)
+        )
+        if stale_ids:
+            CallRecord.objects.filter(id__in=stale_ids).update(
+                status=CallRecord.Status.FAILED,
+                error_message=(
+                    f"Auto-failed: no terminal status received within "
+                    f"{stale_threshold_minutes} minutes (likely missed provider webhook)."
+                ),
+                updated_at=timezone.now(),
+            )
+            logger.warning(
+                f"Auto-failed {len(stale_ids)} stale call record(s) for application "
+                f"{item.application_id}: {stale_ids}"
+            )
+
         if CallRecord.objects.filter(
             application=item.application,
             status__in=active_statuses,
+            created_at__gte=stale_cutoff,
         ).exists():
             logger.info(f"QueueItem {item_id} already has an active call record for its application, skipping dispatch")
             return None
