@@ -1,6 +1,22 @@
 """Serializers for Applicant model."""
 from rest_framework import serializers
+
+from common.phone import normalize_phone
 from .models import Applicant
+
+
+def _normalize_applicant_phone(value):
+    """
+    Shared validator body for applicant phone fields.
+    Returns "" for blank input (phone is optional), otherwise returns the
+    E.164-normalized value. Wraps ValueError in DRF's ValidationError.
+    """
+    if value in (None, ""):
+        return ""
+    try:
+        return normalize_phone(value)
+    except ValueError as exc:
+        raise serializers.ValidationError(str(exc))
 
 
 class ApplicantApplicationSerializer(serializers.Serializer):
@@ -66,6 +82,9 @@ class ApplicantCreateSerializer(serializers.ModelSerializer):
             )
         return value
 
+    def validate_phone(self, value):
+        return _normalize_applicant_phone(value)
+
     def validate_custom_fields(self, value):
         if not isinstance(value, dict):
             raise serializers.ValidationError("custom_fields must be a JSON object.")
@@ -122,6 +141,17 @@ class ApplicantImportSerializer(serializers.ModelSerializer):
                     f"Custom field key '{key[:50]}...' exceeds 100 characters."
                 )
         return value
+
+    def validate_phone(self, value):
+        # Import path is deliberately permissive: normalize to E.164 when we
+        # can, but fall back to the raw value on failure so the row still
+        # lands in the DB. The user can fix invalid phones after import.
+        if value in (None, ""):
+            return ""
+        try:
+            return normalize_phone(value)
+        except ValueError:
+            return str(value)
 
     class Meta:
         model = Applicant

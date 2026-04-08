@@ -258,9 +258,9 @@ def dispatch_queue_item(self, item_id: str, tenant_id: str) -> Optional[str]:
             return None
 
         # Normalize phone — auto-prefixes DEFAULT_PHONE_COUNTRY_CODE if missing
-        from calls.services import _normalize_phone
+        from common.phone import normalize_phone
         try:
-            phone = _normalize_phone(applicant.phone)
+            phone = normalize_phone(applicant.phone)
         except ValueError as exc:
             item.status = CallQueueItem.Status.FAILED
             item.error_message = str(exc)
