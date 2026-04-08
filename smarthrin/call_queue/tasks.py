@@ -173,7 +173,6 @@ def dispatch_queue_item(self, item_id: str, tenant_id: str) -> Optional[str]:
     Dispatch a single AI screening call for a CallQueueItem.
     Handles retry logic based on queue config max_retries.
     """
-    import re
     from django.db import transaction
     from django.utils import timezone
     from integrations.exceptions import VoiceAIProviderError, VoiceAICredentialsMissing, VoiceAIError
@@ -258,12 +257,13 @@ def dispatch_queue_item(self, item_id: str, tenant_id: str) -> Optional[str]:
             _update_queue_failed_count(queue)
             return None
 
-        # Normalize phone
-        E164_PATTERN = re.compile(r"^\+[1-9]\d{1,14}$")
-        phone = re.sub(r"[\s\-\(\)]", "", applicant.phone)
-        if not E164_PATTERN.match(phone):
+        # Normalize phone — auto-prefixes DEFAULT_PHONE_COUNTRY_CODE if missing
+        from calls.services import _normalize_phone
+        try:
+            phone = _normalize_phone(applicant.phone)
+        except ValueError as exc:
             item.status = CallQueueItem.Status.FAILED
-            item.error_message = f"Phone '{applicant.phone}' is not in E.164 format"
+            item.error_message = str(exc)
             item.save(update_fields=["status", "error_message", "updated_at"])
             _update_queue_failed_count(queue)
             return None

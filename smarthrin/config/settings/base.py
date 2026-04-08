@@ -39,6 +39,17 @@ VOICE_AI_API_KEY = env("VOICE_AI_API_KEY", default="")
 # which handles the case of missed provider webhooks.
 CALL_STALE_THRESHOLD_MINUTES = env.int("CALL_STALE_THRESHOLD_MINUTES", default=5)
 
+# Default country code applied when a phone number is missing the + prefix
+# (e.g. legacy/imported applicants saved as "5454210258"). Must include the
+# leading "+", e.g. "+91" for India, "+1" for US/Canada.
+DEFAULT_PHONE_COUNTRY_CODE = env("DEFAULT_PHONE_COUNTRY_CODE", default="+91")
+
+# Length of a local (subscriber) phone number for the default region. Used to
+# disambiguate "10-digit local number that happens to start with the country
+# code's digits" from "fully-qualified number with country code embedded".
+# Default 10 (Indian mobile, also matches US/Canada).
+DEFAULT_PHONE_LOCAL_LENGTH = env.int("DEFAULT_PHONE_LOCAL_LENGTH", default=10)
+
 # Google Calendar (optional — leave blank to disable calendar sync)
 # Set CREDENTIALS_JSON to enable. DELEGATE_EMAIL is only needed for Google Workspace.
 GOOGLE_CALENDAR_CREDENTIALS_JSON = env("GOOGLE_CALENDAR_CREDENTIALS_JSON", default="")
