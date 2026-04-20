@@ -154,6 +154,25 @@ def sync_call_status(call_record_id: str, tenant_id: str) -> None:
 
 
 @shared_task
+def mark_stale_calls_failed() -> int:
+    """
+    Periodic task: auto-fail any in-flight CallRecord whose created_at is older
+    than CALL_STALE_THRESHOLD_MINUTES. This guarantees that the frontend stale
+    timer ("INITIATED → FAILED after 5 minutes") is honored by the backend even
+    when no new call is dispatched to trigger on-demand reaping, and when the
+    provider fails to deliver a terminal webhook.
+
+    Returns the number of records reaped.
+    """
+    from .services import reap_stale_calls
+
+    reaped = reap_stale_calls()
+    if reaped:
+        logger.info(f"mark_stale_calls_failed: reaped {len(reaped)} stale call(s)")
+    return len(reaped)
+
+
+@shared_task
 def send_interview_notification_email(interview_id: str) -> None:
     """
     STUB: Logs interview notification intent.

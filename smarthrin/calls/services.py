@@ -49,6 +49,65 @@ def compute_seconds_until_stale(call_record) -> Optional[int]:
     return int((stale_at - timezone.now()).total_seconds())
 
 
+def reap_stale_calls(
+    tenant_id: Optional[str] = None,
+    application_id: Optional[str] = None,
+) -> list:
+    """
+    Mark in-flight CallRecords older than CALL_STALE_THRESHOLD_MINUTES as FAILED.
+
+    This is the authoritative auto-fail mechanism for calls where the provider
+    never delivers a terminal webhook. It is invoked both on-demand (before
+    dispatching a new call) and by a periodic Celery beat task so the frontend
+    timer's promise — "after 5 minutes, INITIATED becomes FAILED" — is actually
+    honored by the backend regardless of new-call activity.
+
+    Uses per-instance save() so the CallRecord post_save signal fires — that
+    signal resets the Application status from AI_SCREENING back to APPLIED and
+    creates a user notification.
+
+    Returns the list of reaped CallRecord IDs.
+    """
+    from .models import CallRecord
+
+    active_statuses = [
+        CallRecord.Status.QUEUED,
+        CallRecord.Status.INITIATED,
+        CallRecord.Status.RINGING,
+        CallRecord.Status.IN_PROGRESS,
+    ]
+    stale_threshold_minutes = get_call_stale_threshold_minutes()
+    stale_cutoff = timezone.now() - timedelta(minutes=stale_threshold_minutes)
+
+    qs = CallRecord.objects.filter(
+        status__in=active_statuses,
+        created_at__lt=stale_cutoff,
+    )
+    if tenant_id is not None:
+        qs = qs.filter(tenant_id=tenant_id)
+    if application_id is not None:
+        qs = qs.filter(application_id=application_id)
+
+    error_message = (
+        f"Auto-failed: no terminal status received within "
+        f"{stale_threshold_minutes} minutes (likely missed provider webhook)."
+    )
+
+    reaped_ids = []
+    for record in qs.iterator():
+        record.status = CallRecord.Status.FAILED
+        record.error_message = error_message
+        record.save(update_fields=["status", "error_message", "updated_at"])
+        reaped_ids.append(str(record.id))
+
+    if reaped_ids:
+        logger.warning(
+            "Auto-failed %d stale call record(s): %s",
+            len(reaped_ids), reaped_ids,
+        )
+    return reaped_ids
+
+
 class ActiveCallExistsError(Exception):
     """
     Raised when a new screening call cannot be dispatched because an active
@@ -125,40 +184,18 @@ class AIScreeningService:
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
 
-        # Check for active call already in progress. Records older than
-        # CALL_STALE_THRESHOLD_MINUTES are treated as abandoned (missed webhook
-        # from the provider) — auto-fail them so a new call can be dispatched.
+        # Reap any stale in-flight records for this application before evaluating
+        # the active-call guard. Records older than CALL_STALE_THRESHOLD_MINUTES
+        # are treated as abandoned (missed webhook from the provider).
+        reap_stale_calls(tenant_id=tenant_id, application_id=str(application.id))
+
         active_statuses = [
             CallRecord.Status.QUEUED,
             CallRecord.Status.INITIATED,
             CallRecord.Status.RINGING,
             CallRecord.Status.IN_PROGRESS,
         ]
-        stale_threshold_minutes = get_call_stale_threshold_minutes()
-        stale_cutoff = timezone.now() - timedelta(minutes=stale_threshold_minutes)
-
-        # Reap stale in-flight records before evaluating the guard.
-        stale_ids = list(
-            CallRecord.objects.filter(
-                application=application,
-                tenant_id=tenant_id,
-                status__in=active_statuses,
-                created_at__lt=stale_cutoff,
-            ).values_list("id", flat=True)
-        )
-        if stale_ids:
-            CallRecord.objects.filter(id__in=stale_ids).update(
-                status=CallRecord.Status.FAILED,
-                error_message=(
-                    f"Auto-failed: no terminal status received within "
-                    f"{stale_threshold_minutes} minutes (likely missed provider webhook)."
-                ),
-                updated_at=timezone.now(),
-            )
-            logger.warning(
-                "Auto-failed %d stale call record(s) for application %s: %s",
-                len(stale_ids), application_id, stale_ids,
-            )
+        stale_cutoff = timezone.now() - timedelta(minutes=get_call_stale_threshold_minutes())
 
         existing_call = (
             CallRecord.objects.filter(

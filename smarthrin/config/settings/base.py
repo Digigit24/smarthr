@@ -265,4 +265,9 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 900.0,  # Every 15 minutes
         "options": {"expires": 890},
     },
+    "mark-stale-calls-failed": {
+        "task": "calls.tasks.mark_stale_calls_failed",
+        "schedule": 60.0,  # Every 60 seconds — matches the frontend timer granularity
+        "options": {"expires": 55},
+    },
 }
