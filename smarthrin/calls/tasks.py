@@ -173,6 +173,49 @@ def mark_stale_calls_failed() -> int:
 
 
 @shared_task
+def poll_in_flight_calls(limit: int = 100) -> int:
+    """
+    Periodic polling fallback: for every in-flight CallRecord that has a
+    provider_call_id, dispatch sync_call_status to pull the latest status from
+    the Voice AI Orchestrator. This protects against missed/dropped provider
+    webhooks — without it, an answered-and-completed call can remain INITIATED
+    in SmartHR until the stale-reaper auto-fails it 5 minutes later.
+
+    Returns the number of sync tasks queued.
+    """
+    from .models import CallRecord
+
+    in_flight = (
+        CallRecord.objects.filter(
+            status__in=[
+                CallRecord.Status.QUEUED,
+                CallRecord.Status.INITIATED,
+                CallRecord.Status.RINGING,
+                CallRecord.Status.IN_PROGRESS,
+            ],
+        )
+        .exclude(provider_call_id="")
+        .order_by("created_at")
+        .values_list("id", "tenant_id")[:limit]
+    )
+    queued = 0
+    for call_id, tenant_id in in_flight:
+        try:
+            sync_call_status.apply_async(
+                args=[str(call_id), str(tenant_id)],
+                retry=False,
+                broker_connection_timeout=3,
+                broker_connection_retry=False,
+            )
+            queued += 1
+        except Exception as exc:
+            logger.warning(f"Failed to queue sync_call_status for {call_id}: {exc}")
+    if queued:
+        logger.debug(f"poll_in_flight_calls: queued {queued} sync task(s)")
+    return queued
+
+
+@shared_task
 def send_interview_notification_email(interview_id: str) -> None:
     """
     STUB: Logs interview notification intent.

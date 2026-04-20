@@ -17,12 +17,20 @@ def handle_call_completed(payload: dict[str, Any]) -> dict:
     from notifications.services import create_notification
     from notifications.models import Notification
 
-    provider_call_id = payload.get("provider_call_id") or payload.get("call_id", "")
+    provider_call_id = (
+        payload.get("provider_call_id")
+        or payload.get("call_id")
+        or payload.get("id", "")
+    )
 
     try:
         call_record = CallRecord.objects.get(provider_call_id=provider_call_id)
     except CallRecord.DoesNotExist:
-        logger.warning(f"CallRecord not found for provider_call_id={provider_call_id}")
+        logger.warning(
+            "call-completed webhook: CallRecord not found for provider_call_id=%r "
+            "(payload keys=%s)",
+            provider_call_id, sorted(payload.keys()),
+        )
         return {"error": "CallRecord not found"}
 
     # 1. Update CallRecord
@@ -212,13 +220,21 @@ def handle_call_status(payload: dict[str, Any]) -> dict:
     """Process a call-status webhook (real-time status updates)."""
     from calls.models import CallRecord
 
-    call_id = payload.get("call_id", "")
+    call_id = (
+        payload.get("call_id")
+        or payload.get("provider_call_id")
+        or payload.get("id", "")
+    )
     status = payload.get("status", "")
 
     try:
         call_record = CallRecord.objects.get(provider_call_id=call_id)
     except CallRecord.DoesNotExist:
-        logger.warning(f"CallRecord not found for call_id={call_id}")
+        logger.warning(
+            "call-status webhook: CallRecord not found for call_id=%r status=%r "
+            "(payload keys=%s)",
+            call_id, status, sorted(payload.keys()),
+        )
         return {"error": "CallRecord not found"}
 
     status_map = {

@@ -270,4 +270,12 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 60.0,  # Every 60 seconds — matches the frontend timer granularity
         "options": {"expires": 55},
     },
+    "poll-in-flight-calls": {
+        # Pulls live status from the Voice AI Orchestrator for any in-flight
+        # CallRecord that has a provider_call_id. Fallback for missed webhooks
+        # so answered-and-completed calls don't stay stuck at INITIATED.
+        "task": "calls.tasks.poll_in_flight_calls",
+        "schedule": 30.0,  # Every 30 seconds
+        "options": {"expires": 25},
+    },
 }
