@@ -110,7 +110,8 @@ class CallCompletedWebhookView(View):
             return JsonResponse({"error": "Invalid JSON"}, status=400)
         try:
             result = handle_call_completed(payload)
-            return JsonResponse(result)
+            status_code = 404 if isinstance(result, dict) and result.get("error") == "CallRecord not found" else 200
+            return JsonResponse(result, status=status_code)
         except Exception as exc:
             logger.exception(f"Error processing call-completed webhook: {exc}")
             return JsonResponse({"error": "Internal server error"}, status=500)
@@ -136,7 +137,8 @@ class CallStatusWebhookView(View):
             return JsonResponse({"error": "Invalid JSON"}, status=400)
         try:
             result = handle_call_status(payload)
-            return JsonResponse(result)
+            status_code = 404 if isinstance(result, dict) and result.get("error") == "CallRecord not found" else 200
+            return JsonResponse(result, status=status_code)
         except Exception as exc:
             logger.exception(f"Error processing call-status webhook: {exc}")
             return JsonResponse({"error": "Internal server error"}, status=500)

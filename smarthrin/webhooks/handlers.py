@@ -2,15 +2,80 @@
 import logging
 from typing import Any
 
+from django.utils.dateparse import parse_datetime
+
 logger = logging.getLogger(__name__)
+
+
+# Map lowercase snake_case payload status → CallRecord.Status enum.
+# Built lazily so we don't import models at module load time.
+def _status_map():
+    from calls.models import CallRecord
+    return {
+        "initiated": CallRecord.Status.INITIATED,
+        "ringing": CallRecord.Status.RINGING,
+        "in_progress": CallRecord.Status.IN_PROGRESS,
+        "completed": CallRecord.Status.COMPLETED,
+        "failed": CallRecord.Status.FAILED,
+        "no_answer": CallRecord.Status.NO_ANSWER,
+        "busy": CallRecord.Status.BUSY,
+    }
+
+
+def _apply_common_fields(call_record, payload: dict[str, Any]) -> None:
+    """
+    Apply payload fields that can appear on any webhook (status, duration,
+    started_at, ended_at, error_message, transcript, recording_url, summary).
+    Does NOT save — caller is responsible for call_record.save().
+    """
+    # Duration
+    if payload.get("duration") is not None:
+        call_record.duration = payload.get("duration")
+
+    # Timestamps (ISO-8601). Only overwrite started_at if not already set;
+    # ended_at is always overwritten with the latest terminal value.
+    started_at_raw = payload.get("started_at")
+    if started_at_raw:
+        parsed = parse_datetime(started_at_raw)
+        if parsed and not call_record.started_at:
+            call_record.started_at = parsed
+
+    ended_at_raw = payload.get("ended_at")
+    if ended_at_raw:
+        parsed = parse_datetime(ended_at_raw)
+        if parsed:
+            call_record.ended_at = parsed
+
+    # Error message for non-completed terminals
+    error_message = payload.get("error_message")
+    if error_message:
+        call_record.error_message = error_message
+
+    # Content fields (completed payloads carry these)
+    transcript = payload.get("transcript")
+    if transcript:
+        call_record.transcript = transcript
+
+    recording_url = payload.get("recording_url")
+    if recording_url:
+        call_record.recording_url = recording_url
+
+    summary = payload.get("summary")
+    if summary:
+        call_record.summary = summary
 
 
 def handle_call_completed(payload: dict[str, Any]) -> dict:
     """
-    Process a call-completed webhook from Voice AI Orchestrator.
+    Process a terminal-status webhook from Voice AI Orchestrator.
 
-    payload keys: call_id, provider_call_id, transcript, duration, score,
-    status, recording_url, summary, metadata: { applicationId, jobId }
+    Handles every terminal status — completed / failed / no_answer / busy —
+    not just completed. Scorecard/notification/queue side effects only fire
+    on COMPLETED; the other terminal statuses just update fields and rely on
+    the CallRecord post_save signal for downstream notification.
+
+    Expected payload keys: call_id (required), status, duration, started_at,
+    ended_at, transcript, recording_url, summary, score, error_message.
     """
     from calls.models import CallRecord, Scorecard
     from applications.models import Application
@@ -33,14 +98,26 @@ def handle_call_completed(payload: dict[str, Any]) -> dict:
         )
         return {"error": "CallRecord not found"}
 
-    # 1. Update CallRecord
-    call_record.transcript = payload.get("transcript", "")
-    call_record.duration = payload.get("duration")
-    call_record.status = CallRecord.Status.COMPLETED
-    call_record.recording_url = payload.get("recording_url", "")
-    call_record.summary = payload.get("summary", "")
+    # 1. Resolve final status from payload (default to COMPLETED if missing so
+    # we don't regress existing clients that omit `status` on this endpoint).
+    raw_status = (payload.get("status") or "completed").lower()
+    new_status = _status_map().get(raw_status, CallRecord.Status.COMPLETED)
+    call_record.status = new_status
+
+    _apply_common_fields(call_record, payload)
     call_record.raw_response = payload
     call_record.save()
+
+    # Downstream side effects (scorecard / notification / activity / queue
+    # update) only make sense on a successful COMPLETED call. For
+    # FAILED / NO_ANSWER / BUSY the CallRecord post_save signal fires the
+    # appropriate failure notification; we're done here.
+    if new_status != CallRecord.Status.COMPLETED:
+        return {
+            "status": "processed",
+            "call_record_id": str(call_record.id),
+            "final_status": new_status,
+        }
 
     # 2. Create Scorecard (if not already created by the Celery task).
     # Use normalize_score to ensure consistent 0-10 scale regardless of provider.
@@ -217,7 +294,15 @@ def _resolve_owner_email(application) -> str:
 
 
 def handle_call_status(payload: dict[str, Any]) -> dict:
-    """Process a call-status webhook (real-time status updates)."""
+    """
+    Process a real-time call-status webhook (ringing / in_progress / etc.).
+
+    Persists status changes plus any of the shared fields (started_at,
+    ended_at, duration, error_message, transcript, recording_url, summary)
+    that voiceb includes on the event. This matters because voiceb's
+    webhookWorker routes some ERROR events here rather than to
+    /call-completed/ — we still want the timestamps and failure reason saved.
+    """
     from calls.models import CallRecord
 
     call_id = (
@@ -237,18 +322,11 @@ def handle_call_status(payload: dict[str, Any]) -> dict:
         )
         return {"error": "CallRecord not found"}
 
-    status_map = {
-        "initiated": CallRecord.Status.INITIATED,
-        "ringing": CallRecord.Status.RINGING,
-        "in_progress": CallRecord.Status.IN_PROGRESS,
-        "completed": CallRecord.Status.COMPLETED,
-        "failed": CallRecord.Status.FAILED,
-        "no_answer": CallRecord.Status.NO_ANSWER,
-        "busy": CallRecord.Status.BUSY,
-    }
-    new_status = status_map.get(status.lower())
+    new_status = _status_map().get(status.lower())
     if new_status:
         call_record.status = new_status
-        call_record.save(update_fields=["status", "updated_at"])
+
+    _apply_common_fields(call_record, payload)
+    call_record.save()
 
     return {"status": "updated", "call_record_id": str(call_record.id)}
