@@ -112,9 +112,17 @@ def handle_call_completed(payload: dict[str, Any]) -> dict:
         or payload.get("id", "")
     )
 
-    try:
-        call_record = CallRecord.objects.get(provider_call_id=provider_call_id)
-    except CallRecord.DoesNotExist:
+    if not provider_call_id:
+        logger.warning(
+            "call-completed webhook: missing call_id in payload (payload keys=%s, payload=%r)",
+            sorted(payload.keys()), payload,
+        )
+        return {"error": "CallRecord not found"}
+
+    # Use filter().first() rather than get() so we never crash with
+    # MultipleObjectsReturned — empty-string matches can hit unrelated rows.
+    call_record = CallRecord.objects.filter(provider_call_id=provider_call_id).first()
+    if call_record is None:
         logger.warning(
             "call-completed webhook: CallRecord not found for provider_call_id=%r "
             "(payload keys=%s)",
@@ -338,9 +346,16 @@ def handle_call_status(payload: dict[str, Any]) -> dict:
     )
     status = payload.get("status", "")
 
-    try:
-        call_record = CallRecord.objects.get(provider_call_id=call_id)
-    except CallRecord.DoesNotExist:
+    if not call_id:
+        logger.warning(
+            "call-status webhook: missing call_id in payload status=%r "
+            "(payload keys=%s, payload=%r)",
+            status, sorted(payload.keys()), payload,
+        )
+        return {"error": "CallRecord not found"}
+
+    call_record = CallRecord.objects.filter(provider_call_id=call_id).first()
+    if call_record is None:
         logger.warning(
             "call-status webhook: CallRecord not found for call_id=%r status=%r "
             "(payload keys=%s)",
