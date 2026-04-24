@@ -7,8 +7,10 @@ from django.utils.dateparse import parse_datetime
 logger = logging.getLogger(__name__)
 
 
-# Map lowercase snake_case payload status → CallRecord.Status enum.
-# Built lazily so we don't import models at module load time.
+# Per voiceb contract, incoming status values are lowercase snake_case and
+# must be one of: ringing, in_progress, completed, failed, no_answer, busy.
+# `initiated` is set only by SmartHR at dispatch time; keep it in the map so
+# an echo from voiceb wouldn't corrupt state.
 def _status_map():
     from calls.models import CallRecord
     return {
@@ -20,6 +22,28 @@ def _status_map():
         "no_answer": CallRecord.Status.NO_ANSWER,
         "busy": CallRecord.Status.BUSY,
     }
+
+
+def _map_incoming_status(raw: Any, *, endpoint: str, call_id: str):
+    """
+    Resolve an incoming status string to a CallRecord.Status.
+
+    Unknown values (or a missing status) are logged and treated as FAILED per
+    voiceb's safe-fallback contract — we'd rather false-fail than auto-
+    shortlist a call we don't know completed successfully.
+    """
+    from calls.models import CallRecord
+
+    normalized = (raw or "").strip().lower() if isinstance(raw, str) else ""
+    mapped = _status_map().get(normalized)
+    if mapped is not None:
+        return mapped
+
+    logger.warning(
+        "%s webhook: unknown status=%r for call_id=%r — falling back to FAILED",
+        endpoint, raw, call_id,
+    )
+    return CallRecord.Status.FAILED
 
 
 def _apply_common_fields(call_record, payload: dict[str, Any]) -> None:
@@ -98,10 +122,12 @@ def handle_call_completed(payload: dict[str, Any]) -> dict:
         )
         return {"error": "CallRecord not found"}
 
-    # 1. Resolve final status from payload (default to COMPLETED if missing so
-    # we don't regress existing clients that omit `status` on this endpoint).
-    raw_status = (payload.get("status") or "completed").lower()
-    new_status = _status_map().get(raw_status, CallRecord.Status.COMPLETED)
+    # Resolve final status from payload. Unknown / missing → FAILED.
+    new_status = _map_incoming_status(
+        payload.get("status"),
+        endpoint="call-completed",
+        call_id=provider_call_id,
+    )
     call_record.status = new_status
 
     _apply_common_fields(call_record, payload)
@@ -322,9 +348,9 @@ def handle_call_status(payload: dict[str, Any]) -> dict:
         )
         return {"error": "CallRecord not found"}
 
-    new_status = _status_map().get(status.lower())
-    if new_status:
-        call_record.status = new_status
+    call_record.status = _map_incoming_status(
+        status, endpoint="call-status", call_id=call_id,
+    )
 
     _apply_common_fields(call_record, payload)
     call_record.save()
