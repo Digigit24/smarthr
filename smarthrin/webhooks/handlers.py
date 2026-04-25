@@ -70,6 +70,17 @@ def _apply_common_fields(call_record, payload: dict[str, Any]) -> None:
         if parsed:
             call_record.ended_at = parsed
 
+    # Backfill duration from the timestamps when voiceb didn't supply one
+    # (or sent 0). Talk time = ended_at - started_at, in whole seconds.
+    if (
+        not call_record.duration
+        and call_record.started_at
+        and call_record.ended_at
+    ):
+        delta = (call_record.ended_at - call_record.started_at).total_seconds()
+        if delta > 0:
+            call_record.duration = int(delta)
+
     # Error message for non-completed terminals
     error_message = payload.get("error_message")
     if error_message:
