@@ -52,9 +52,12 @@ def _apply_common_fields(call_record, payload: dict[str, Any]) -> None:
     started_at, ended_at, error_message, transcript, recording_url, summary).
     Does NOT save — caller is responsible for call_record.save().
     """
-    # Duration
-    if payload.get("duration") is not None:
-        call_record.duration = payload.get("duration")
+    # Duration: respect what voiceb sends, including an explicit 0 for
+    # no_answer / busy (means the candidate never talked — must NOT be
+    # overwritten by a backfill from the ringing window).
+    duration_in_payload = payload.get("duration")
+    if duration_in_payload is not None:
+        call_record.duration = duration_in_payload
 
     # Timestamps (ISO-8601). Only overwrite started_at if not already set;
     # ended_at is always overwritten with the latest terminal value.
@@ -70,10 +73,15 @@ def _apply_common_fields(call_record, payload: dict[str, Any]) -> None:
         if parsed:
             call_record.ended_at = parsed
 
-    # Backfill duration from the timestamps when voiceb didn't supply one
-    # (or sent 0). Talk time = ended_at - started_at, in whole seconds.
+    # Backfill duration ONLY when:
+    #   - voiceb didn't send any duration field (None, not 0)
+    #   - status is COMPLETED — for no_answer/busy/failed, the ringing window
+    #     between started_at and ended_at is NOT talk time and must stay 0
+    #   - we have both timestamps to subtract
+    from calls.models import CallRecord
     if (
-        not call_record.duration
+        duration_in_payload is None
+        and call_record.status == CallRecord.Status.COMPLETED
         and call_record.started_at
         and call_record.ended_at
     ):
