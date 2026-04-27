@@ -56,15 +56,15 @@ def reap_stale_calls(
     """
     Mark in-flight CallRecords older than CALL_STALE_THRESHOLD_MINUTES as FAILED.
 
-    This is the authoritative auto-fail mechanism for calls where the provider
-    never delivers a terminal webhook. It is invoked both on-demand (before
-    dispatching a new call) and by a periodic Celery beat task so the frontend
-    timer's promise — "after 5 minutes, INITIATED becomes FAILED" — is actually
-    honored by the backend regardless of new-call activity.
+    Only reaps records that have received NO webhook activity (raw_response is
+    empty). Once any webhook lands — even a non-terminal one like ringing or
+    in_progress — voiceb is in charge of the lifecycle and we shouldn't race
+    its terminal webhook with our own auto-fail.
 
-    Uses per-instance save() so the CallRecord post_save signal fires — that
-    signal resets the Application status from AI_SCREENING back to APPLIED and
-    creates a user notification.
+    Invoked both on-demand (before dispatching a new call) and by a periodic
+    Celery beat task. Uses per-instance save() so the CallRecord post_save
+    signal fires — that signal resets the Application status from AI_SCREENING
+    back to APPLIED and creates a user notification.
 
     Returns the list of reaped CallRecord IDs.
     """
@@ -82,6 +82,7 @@ def reap_stale_calls(
     qs = CallRecord.objects.filter(
         status__in=active_statuses,
         created_at__lt=stale_cutoff,
+        raw_response={},
     )
     if tenant_id is not None:
         qs = qs.filter(tenant_id=tenant_id)

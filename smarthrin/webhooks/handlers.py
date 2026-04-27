@@ -89,6 +89,21 @@ def _apply_common_fields(call_record, payload: dict[str, Any]) -> None:
         if delta > 0:
             call_record.duration = int(delta)
 
+    # For non-completed terminals (no_answer / busy / failed), if voiceb
+    # omitted duration entirely, default to 0 so the UI shows "0s" instead
+    # of blank. The candidate didn't talk — there is no talk time.
+    non_completed_terminals = (
+        CallRecord.Status.NO_ANSWER,
+        CallRecord.Status.BUSY,
+        CallRecord.Status.FAILED,
+    )
+    if (
+        duration_in_payload is None
+        and call_record.duration is None
+        and call_record.status in non_completed_terminals
+    ):
+        call_record.duration = 0
+
     # Error message for non-completed terminals
     error_message = payload.get("error_message")
     if error_message:
