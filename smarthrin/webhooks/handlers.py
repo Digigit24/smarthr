@@ -187,8 +187,10 @@ def handle_call_completed(payload: dict[str, Any]) -> dict:
             "final_status": new_status,
         }
 
-    # 2. Create Scorecard (if not already created by the Celery task).
-    # Use normalize_score to ensure consistent 0-10 scale regardless of provider.
+    # 2. Create / update Scorecard from voiceb's score block.
+    # Use update_or_create so a follow-up enrichment webhook for the same call
+    # (e.g. voiceb's two-stage forwarding) refreshes the row instead of being
+    # silently dropped.
     # NOTE: Do NOT set application.status here — the on_scorecard_saved signal
     # handles auto-routing (SHORTLISTED / REJECTED / AI_COMPLETED) based on thresholds.
     score_data = payload.get("score", {})
@@ -201,29 +203,45 @@ def handle_call_completed(payload: dict[str, Any]) -> dict:
         rel = normalize_score(float(score_data.get("relevance", 0) or 0))
         fallback_overall = normalize_score(float(score_data.get("overall", 0) or 0))
         overall = compute_overall_score(comm, know, conf, rel, fallback_overall)
-        rec_str = compute_recommendation(overall)
 
-        # Only create if one doesn't already exist (Celery task may have beaten us)
-        if not Scorecard.objects.filter(call_record=call_record).exists():
-            scorecard = Scorecard.objects.create(
-                application=call_record.application,
-                call_record=call_record,
-                tenant_id=call_record.tenant_id,
-                owner_user_id=call_record.owner_user_id,
-                communication_score=comm,
-                knowledge_score=know,
-                confidence_score=conf,
-                relevance_score=rel,
-                overall_score=overall,
-                summary=payload.get("summary", ""),
-                strengths=score_data.get("strengths", []),
-                weaknesses=score_data.get("weaknesses", []),
-                detailed_feedback=score_data.get("detailed_feedback", {}),
-                recommendation=rec_str if rec_str in Scorecard.Recommendation.values else "MAYBE",
-            )
-            # on_scorecard_saved signal will set application status via thresholds
+        # Prefer voiceb's explicit recommendation (the AI's own judgment) when
+        # present; fall back to a threshold-derived label if missing.
+        detailed_feedback = score_data.get("detailed_feedback", {}) or {}
+        provided_rec = (detailed_feedback.get("recommendation") or "").upper().replace(" ", "_")
+        if provided_rec in Scorecard.Recommendation.values:
+            recommendation = provided_rec
         else:
-            scorecard = Scorecard.objects.filter(call_record=call_record).first()
+            computed_rec = compute_recommendation(overall)
+            recommendation = computed_rec if computed_rec in Scorecard.Recommendation.values else "MAYBE"
+
+        # detailed_feedback may carry a more meaningful evaluation summary;
+        # fall back to the call-level summary if that's all we have.
+        scorecard_summary = (
+            detailed_feedback.get("summary")
+            or payload.get("summary")
+            or ""
+        )
+
+        scorecard, _created = Scorecard.objects.update_or_create(
+            call_record=call_record,
+            defaults={
+                "application": call_record.application,
+                "tenant_id": call_record.tenant_id,
+                "owner_user_id": call_record.owner_user_id,
+                "communication_score": comm,
+                "knowledge_score": know,
+                "confidence_score": conf,
+                "relevance_score": rel,
+                "overall_score": overall,
+                "summary": scorecard_summary,
+                "strengths": score_data.get("strengths", []),
+                "weaknesses": score_data.get("weaknesses", []),
+                "detailed_feedback": detailed_feedback,
+                "recommendation": recommendation,
+            },
+        )
+        # on_scorecard_saved signal will set application status via thresholds
+        # (only fires on initial create; updates re-use the existing routing).
 
     # 4. Create notification for application owner (in-app + email)
     application = call_record.application
