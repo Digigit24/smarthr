@@ -18,6 +18,13 @@ class Applicant(TenantBaseModel):
     email = models.EmailField(blank=True, default="")
     phone = models.CharField(max_length=50, blank=True, default="")
     resume_url = models.CharField(max_length=500, blank=True, default="")
+    resume_file = models.FileField(
+        upload_to="resumes/%Y/%m/",
+        max_length=500,
+        null=True,
+        blank=True,
+        help_text="Optional uploaded resume file (PDF/DOC/DOCX). Coexists with resume_url for legacy/external links.",
+    )
     linkedin_url = models.CharField(max_length=500, blank=True, default="")
     portfolio_url = models.CharField(max_length=500, blank=True, default="")
     skills = models.JSONField(default=list, blank=True)

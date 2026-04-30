@@ -158,6 +158,18 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
+# User-uploaded files (resumes, etc.). Apache vhost on prod must Alias /media/
+# to MEDIA_ROOT so download-resume URLs resolve to actual files; the dev URL
+# config (config/urls.py) wires this up for `manage.py runserver` automatically.
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
+# Resume upload size cap. Anything larger is rejected at the Django request
+# parser before hitting the view, so mis-sized files don't fill memory.
+MAX_RESUME_UPLOAD_BYTES = env.int("MAX_RESUME_UPLOAD_BYTES", default=10 * 1024 * 1024)  # 10 MB
+DATA_UPLOAD_MAX_MEMORY_SIZE = MAX_RESUME_UPLOAD_BYTES
+FILE_UPLOAD_MAX_MEMORY_SIZE = MAX_RESUME_UPLOAD_BYTES
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Authentication backends — SuperAdmin API first, then Django model backend as fallback

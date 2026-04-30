@@ -10,8 +10,10 @@ from drf_spectacular.utils import (
     inline_serializer,
 )
 from drf_spectacular.types import OpenApiTypes
+from django.http import FileResponse
 from rest_framework import serializers
 from rest_framework.decorators import action, api_view, authentication_classes, permission_classes
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
@@ -817,6 +819,8 @@ class ApplicantViewSet(TenantViewSetMixin, ModelViewSet):
 
     queryset = Applicant.objects.prefetch_related("applications__job")
     authentication_classes = [JWTRequestAuthentication]
+    # Accept multipart for resume_file uploads alongside JSON for everything else.
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     pagination_class = StandardResultsPagination
     filterset_class = ApplicantFilterSet
     search_fields = ["first_name", "last_name", "email"]
@@ -831,6 +835,7 @@ class ApplicantViewSet(TenantViewSetMixin, ModelViewSet):
             "partial_update": require_permission("smarthrin.applicants.edit"),
             "destroy": require_permission("smarthrin.applicants.delete"),
             "applications": require_permission("smarthrin.applications.view"),
+            "download_resume": require_permission("smarthrin.applicants.view"),
         }
         perm_class = action_permission_map.get(
             self.action, require_permission("smarthrin.applicants.view")
@@ -900,3 +905,34 @@ class ApplicantViewSet(TenantViewSetMixin, ModelViewSet):
             qs, many=True, context={"request": request}
         )
         return Response(serializer.data)
+
+    @extend_schema(
+        tags=["Applicants"],
+        summary="Download applicant's uploaded resume",
+        description=(
+            "Streams the applicant's stored resume file as an attachment. "
+            "Returns 404 when no file has been uploaded; check resume_url for "
+            "an external link in that case."
+        ),
+        responses={
+            200: OpenApiResponse(description="Binary resume file (PDF/DOC/DOCX/TXT)"),
+            404: OpenApiResponse(description="No resume uploaded for this applicant"),
+        },
+    )
+    @action(detail=True, methods=["get"], url_path="download-resume", url_name="download-resume")
+    def download_resume(self, request, pk=None):
+        applicant = self.get_object()
+        if not applicant.resume_file:
+            return Response(
+                {"error": "No resume uploaded for this applicant."},
+                status=404,
+            )
+        # Use the storage backend to open the file — works for local FileSystemStorage
+        # today and for S3/object storage if/when MEDIA_ROOT moves there.
+        original_name = applicant.resume_file.name.rsplit("/", 1)[-1]
+        download_name = f"{applicant.first_name}_{applicant.last_name}_{original_name}".strip("_")
+        return FileResponse(
+            applicant.resume_file.open("rb"),
+            as_attachment=True,
+            filename=download_name,
+        )

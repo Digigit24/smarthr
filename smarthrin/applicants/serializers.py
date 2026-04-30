@@ -52,19 +52,44 @@ class ApplicantCreateSerializer(serializers.ModelSerializer):
     """Write serializer for create/update — keeps full validation."""
     email = serializers.EmailField(required=True)
     resume_url = serializers.URLField(required=False, allow_blank=True)
+    resume_file = serializers.FileField(required=False, allow_null=True)
     linkedin_url = serializers.URLField(required=False, allow_blank=True)
     portfolio_url = serializers.URLField(required=False, allow_blank=True)
+
+    # Allowed resume content types — matched against the upload's MIME type.
+    _ALLOWED_RESUME_CONTENT_TYPES = {
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "text/plain",
+    }
 
     class Meta:
         model = Applicant
         fields = [
             "id",
             "first_name", "last_name", "email", "phone",
-            "resume_url", "linkedin_url", "portfolio_url",
+            "resume_url", "resume_file", "linkedin_url", "portfolio_url",
             "skills", "experience_years", "current_company", "current_role",
             "notes", "source", "tags", "custom_fields",
         ]
         read_only_fields = ["id"]
+
+    def validate_resume_file(self, value):
+        if value is None:
+            return value
+        from django.conf import settings
+        max_bytes = getattr(settings, "MAX_RESUME_UPLOAD_BYTES", 10 * 1024 * 1024)
+        if value.size > max_bytes:
+            raise serializers.ValidationError(
+                f"Resume file exceeds the {max_bytes // (1024 * 1024)} MB limit."
+            )
+        content_type = getattr(value, "content_type", "") or ""
+        if content_type and content_type not in self._ALLOWED_RESUME_CONTENT_TYPES:
+            raise serializers.ValidationError(
+                "Resume must be a PDF, DOC, DOCX, or plain-text file."
+            )
+        return value
 
     def validate_email(self, value):
         request = self.context.get("request")
@@ -166,17 +191,28 @@ class ApplicantImportSerializer(serializers.ModelSerializer):
 class ApplicantDetailSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
     applications = ApplicantApplicationSerializer(many=True, read_only=True)
+    resume_file = serializers.FileField(read_only=True)
+    resume_download_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Applicant
         fields = [
             "id", "tenant_id", "owner_user_id",
             "first_name", "last_name", "full_name", "email", "phone",
-            "resume_url", "linkedin_url", "portfolio_url",
+            "resume_url", "resume_file", "resume_download_url",
+            "linkedin_url", "portfolio_url",
             "skills", "experience_years", "current_company", "current_role",
             "notes", "source", "tags", "custom_fields", "applications", "created_at", "updated_at",
         ]
         read_only_fields = ["id", "tenant_id", "owner_user_id", "created_at", "updated_at"]
+
+    def get_resume_download_url(self, obj) -> str:
+        """API endpoint to download the uploaded resume; null when no file."""
+        if not obj.resume_file:
+            return None
+        request = self.context.get("request")
+        path = f"/api/v1/applicants/{obj.id}/download-resume/"
+        return request.build_absolute_uri(path) if request else path
 
     def get_full_name(self, obj) -> str:
         return f"{obj.first_name} {obj.last_name}"
