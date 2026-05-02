@@ -6,12 +6,19 @@ from django.utils.dateparse import parse_datetime
 
 logger = logging.getLogger(__name__)
 
-# Below either of these thresholds, treat the call as "no real conversation"
-# and zero out the scorecard regardless of what OMNIDIM/voiceb reports.
-# OMNIDIM defaults its `extracted_variables.score` to 5/10 when there's
-# nothing to evaluate, which misleads recruiters.
-NO_ENGAGEMENT_MIN_DURATION_SECONDS = 15
-NO_ENGAGEMENT_MIN_USER_WORDS = 10
+# Engagement tiers for scoring. OMNIDIM defaults its score to 5/10 even on
+# nearly-silent calls, so recruiters see a misleading "borderline" signal
+# from a candidate who barely spoke. We grade the score down by how much
+# the candidate actually talked:
+#   - tier "none":    < 10 user words OR call < 15s   → all scores 0, rec NO
+#   - tier "low":     10–49 user words                → each score capped at 3, rec capped at NO
+#   - tier "full":    50+ user words                  → trust OMNIDIM's score as-is
+#
+# Tune by changing the constants below; the rest of the code reads them.
+ENGAGEMENT_NONE_MAX_USER_WORDS = 10           # below this → tier "none"
+ENGAGEMENT_LOW_MAX_USER_WORDS = 50            # below this (and at/above NONE) → tier "low"
+ENGAGEMENT_NONE_MAX_DURATION_SECONDS = 15     # short calls always tier "none"
+ENGAGEMENT_LOW_SCORE_CAP = 3                  # max numeric score for tier "low"
 
 
 def _candidate_user_word_count(transcript: str) -> int:
@@ -31,17 +38,24 @@ def _candidate_user_word_count(transcript: str) -> int:
     return total
 
 
-def _is_no_engagement_call(call_record, transcript: str) -> bool:
+def _engagement_tier(call_record, transcript: str) -> str:
     """
-    Return True when the call is too short OR the candidate barely spoke.
-    Used to override OMNIDIM's default 5/10 scores on calls with no real
-    conversation.
+    Classify how much the candidate engaged. Returns one of:
+        "none" — empty/very-short call, score must be zeroed out
+        "low"  — sparse conversation, score must be capped
+        "full" — real conversation, trust OMNIDIM's score
     """
-    if call_record.duration is not None and call_record.duration < NO_ENGAGEMENT_MIN_DURATION_SECONDS:
-        return True
-    if _candidate_user_word_count(transcript) < NO_ENGAGEMENT_MIN_USER_WORDS:
-        return True
-    return False
+    if (
+        call_record.duration is not None
+        and call_record.duration < ENGAGEMENT_NONE_MAX_DURATION_SECONDS
+    ):
+        return "none"
+    words = _candidate_user_word_count(transcript)
+    if words < ENGAGEMENT_NONE_MAX_USER_WORDS:
+        return "none"
+    if words < ENGAGEMENT_LOW_MAX_USER_WORDS:
+        return "low"
+    return "full"
 
 
 # Per voiceb contract, incoming status values are lowercase snake_case and
@@ -259,13 +273,13 @@ def handle_call_completed(payload: dict[str, Any]) -> dict:
             or ""
         )
 
-        # Override OMNIDIM's defaults when the candidate didn't actually
-        # engage. Their AI returns 5/10 across the board for empty calls,
-        # which makes a non-conversation look like a borderline candidate.
-        # Truthful representation: zero scores + NO recommendation, keeping
-        # whatever summary OMNIDIM sent (it usually admits the call was
-        # too short to evaluate).
-        if _is_no_engagement_call(call_record, payload.get("transcript", "")):
+        # Override OMNIDIM's defaults based on how much the candidate
+        # actually engaged. OMNIDIM returns 5/10 on calls where nothing was
+        # said, which misleads recruiters; cap or zero the score so the UI
+        # reflects reality.
+        transcript_for_tier = payload.get("transcript", "") or call_record.transcript or ""
+        tier = _engagement_tier(call_record, transcript_for_tier)
+        if tier == "none":
             comm = know = conf = rel = overall = 0
             recommendation = "NO"
             if not scorecard_summary:
@@ -274,11 +288,30 @@ def handle_call_completed(payload: dict[str, Any]) -> dict:
                     "no answers to evaluate."
                 )
             logger.info(
-                "Zeroed scorecard for call_record=%s (no-engagement: duration=%s, "
-                "user_words=%d)",
+                "Zeroed scorecard for call_record=%s (engagement tier=none: "
+                "duration=%s, user_words=%d)",
                 call_record.id,
                 call_record.duration,
-                _candidate_user_word_count(payload.get("transcript", "")),
+                _candidate_user_word_count(transcript_for_tier),
+            )
+        elif tier == "low":
+            cap = ENGAGEMENT_LOW_SCORE_CAP
+            comm = min(comm, cap)
+            know = min(know, cap)
+            conf = min(conf, cap)
+            rel = min(rel, cap)
+            overall = min(overall, cap)
+            # Cap the recommendation too — sparse conversations can't be
+            # better than NO. (Order: STRONG_NO < NO < MAYBE < YES < STRONG_YES.)
+            if recommendation in ("MAYBE", "YES", "STRONG_YES"):
+                recommendation = "NO"
+            logger.info(
+                "Capped scorecard for call_record=%s (engagement tier=low: "
+                "duration=%s, user_words=%d, cap=%d)",
+                call_record.id,
+                call_record.duration,
+                _candidate_user_word_count(transcript_for_tier),
+                cap,
             )
 
         # Race-safe upsert. Two voiceb webhooks for the same call (e.g. their
