@@ -85,6 +85,17 @@ class Scorecard(TenantBaseModel):
             models.Index(fields=["tenant_id", "application_id"]),
             models.Index(fields=["tenant_id", "overall_score"]),
         ]
+        constraints = [
+            # One Scorecard per CallRecord. The upsert path in
+            # webhooks/handlers.py turns a duplicate webhook from voiceb (or a
+            # race between the webhook handler and the generate_scorecard
+            # Celery task) into an UPDATE rather than a duplicate INSERT.
+            models.UniqueConstraint(
+                fields=["call_record"],
+                name="unique_scorecard_per_call_record",
+                condition=models.Q(call_record__isnull=False),
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"Scorecard for {self.application} — {self.overall_score}"

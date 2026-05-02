@@ -222,24 +222,41 @@ def handle_call_completed(payload: dict[str, Any]) -> dict:
             or ""
         )
 
-        scorecard, _created = Scorecard.objects.update_or_create(
-            call_record=call_record,
-            defaults={
-                "application": call_record.application,
-                "tenant_id": call_record.tenant_id,
-                "owner_user_id": call_record.owner_user_id,
-                "communication_score": comm,
-                "knowledge_score": know,
-                "confidence_score": conf,
-                "relevance_score": rel,
-                "overall_score": overall,
-                "summary": scorecard_summary,
-                "strengths": score_data.get("strengths", []),
-                "weaknesses": score_data.get("weaknesses", []),
-                "detailed_feedback": detailed_feedback,
-                "recommendation": recommendation,
-            },
-        )
+        # Race-safe upsert. Two voiceb webhooks for the same call (e.g. their
+        # two-stage forwarding) can arrive in parallel; without this, both
+        # transactions would pass the existence check and INSERT, producing
+        # duplicate Scorecards. Wrap in atomic + catch IntegrityError so the
+        # losing transaction falls through to an UPDATE on the row the winner
+        # just created. The DB-level UniqueConstraint on Scorecard.call_record
+        # is what makes this race-safe.
+        from django.db import IntegrityError, transaction
+
+        scorecard_defaults = {
+            "application": call_record.application,
+            "tenant_id": call_record.tenant_id,
+            "owner_user_id": call_record.owner_user_id,
+            "communication_score": comm,
+            "knowledge_score": know,
+            "confidence_score": conf,
+            "relevance_score": rel,
+            "overall_score": overall,
+            "summary": scorecard_summary,
+            "strengths": score_data.get("strengths", []),
+            "weaknesses": score_data.get("weaknesses", []),
+            "detailed_feedback": detailed_feedback,
+            "recommendation": recommendation,
+        }
+        try:
+            with transaction.atomic():
+                scorecard, _created = Scorecard.objects.update_or_create(
+                    call_record=call_record,
+                    defaults=scorecard_defaults,
+                )
+        except IntegrityError:
+            scorecard = Scorecard.objects.get(call_record=call_record)
+            for field, value in scorecard_defaults.items():
+                setattr(scorecard, field, value)
+            scorecard.save()
         # on_scorecard_saved signal will set application status via thresholds
         # (only fires on initial create; updates re-use the existing routing).
 
