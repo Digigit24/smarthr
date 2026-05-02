@@ -6,6 +6,43 @@ from django.utils.dateparse import parse_datetime
 
 logger = logging.getLogger(__name__)
 
+# Below either of these thresholds, treat the call as "no real conversation"
+# and zero out the scorecard regardless of what OMNIDIM/voiceb reports.
+# OMNIDIM defaults its `extracted_variables.score` to 5/10 when there's
+# nothing to evaluate, which misleads recruiters.
+NO_ENGAGEMENT_MIN_DURATION_SECONDS = 15
+NO_ENGAGEMENT_MIN_USER_WORDS = 10
+
+
+def _candidate_user_word_count(transcript: str) -> int:
+    """
+    Count words spoken by the candidate, parsed from voiceb's transcript
+    format ('User: ...\\nLLM: ...'). Returns 0 if no transcript or no
+    User: lines are present.
+    """
+    if not transcript:
+        return 0
+    total = 0
+    for line in transcript.splitlines():
+        stripped = line.lstrip()
+        if stripped.lower().startswith("user:"):
+            content = stripped.split(":", 1)[1].strip()
+            total += len(content.split())
+    return total
+
+
+def _is_no_engagement_call(call_record, transcript: str) -> bool:
+    """
+    Return True when the call is too short OR the candidate barely spoke.
+    Used to override OMNIDIM's default 5/10 scores on calls with no real
+    conversation.
+    """
+    if call_record.duration is not None and call_record.duration < NO_ENGAGEMENT_MIN_DURATION_SECONDS:
+        return True
+    if _candidate_user_word_count(transcript) < NO_ENGAGEMENT_MIN_USER_WORDS:
+        return True
+    return False
+
 
 # Per voiceb contract, incoming status values are lowercase snake_case and
 # must be one of: ringing, in_progress, completed, failed, no_answer, busy.
@@ -221,6 +258,28 @@ def handle_call_completed(payload: dict[str, Any]) -> dict:
             or payload.get("summary")
             or ""
         )
+
+        # Override OMNIDIM's defaults when the candidate didn't actually
+        # engage. Their AI returns 5/10 across the board for empty calls,
+        # which makes a non-conversation look like a borderline candidate.
+        # Truthful representation: zero scores + NO recommendation, keeping
+        # whatever summary OMNIDIM sent (it usually admits the call was
+        # too short to evaluate).
+        if _is_no_engagement_call(call_record, payload.get("transcript", "")):
+            comm = know = conf = rel = overall = 0
+            recommendation = "NO"
+            if not scorecard_summary:
+                scorecard_summary = (
+                    "Candidate did not engage in the conversation; "
+                    "no answers to evaluate."
+                )
+            logger.info(
+                "Zeroed scorecard for call_record=%s (no-engagement: duration=%s, "
+                "user_words=%d)",
+                call_record.id,
+                call_record.duration,
+                _candidate_user_word_count(payload.get("transcript", "")),
+            )
 
         # Race-safe upsert. Two voiceb webhooks for the same call (e.g. their
         # two-stage forwarding) can arrive in parallel; without this, both
